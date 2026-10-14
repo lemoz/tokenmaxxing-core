@@ -1,11 +1,14 @@
-# Normalization contract v1 / adapter codex-1
+# Normalization contract v1 / adapters codex-1 and claude-1
 
 This slice preserves source evidence and exposes conservative canonical views.
 It does not establish accomplishments, task success, shipments, or work episodes.
-All event outcomes are `unknown`, even with a source `status` or `task_complete`.
+All event and interaction outcomes are `unknown`, even with a source `status`,
+`task_complete`, `stop_reason` or `is_error`.
 Source status values remain unchanged in `canonical` and/or `source_record`.
-Codex alone is implemented. Claude, Hermes, persistent imports, evidence profiles,
-and category leaderboards are later work.
+Explicit formats are `codex-jsonl`, `codex-legacy-json` and `claude-code-jsonl`.
+Hermes, persistent imports, evidence profiles and category leaderboards are later
+work. The Claude view is additive; Codex bytes, identities and summaries retain
+the `codex-1` contract.
 
 ## Artifact and ordering
 
@@ -32,14 +35,14 @@ is followed. Source references are descriptive, never execution instructions.
 
 ## Session and event identities
 
-The identity is provider `codex` plus the exact nonempty string observed at
+For Codex, identity is provider `codex` plus the exact nonempty string observed at
 `session_meta.payload.id` or legacy `session.id`. The serialized `session_id` is
 `codex:` followed by that string; `native_session_id` retains it verbatim. It is
 never inferred from a filename, timestamp, or transcript text. Missing IDs yield
 null, explicit diagnostics, and revision-scoped event identities; they do not
 create a verified native session. Conflicting observed IDs abort the import.
 
-The header records the first metadata record's observed ID aliases, timestamp,
+The Codex header records the first metadata record's observed ID aliases, timestamp,
 and direct parent fields (`parent_thread_id`, `parent_session_id`, `parent_id`,
 `forked_from_id`) if present, plus explicit missing fields. Extra metadata records
 are retained as events and flagged. Other/nested parent representations remain
@@ -66,7 +69,7 @@ Each invocation writes a fresh artifact and refuses an existing destination.
 It does not append events. This is deterministic normalization, not database
 idempotency, a persistent import registry, or cross-history deduplication.
 
-## Canonicalization and coverage
+## Codex canonicalization and coverage
 
 * `response_item` and legacy item `message` become canonical messages. Preserve
   role and the full ordered content list, plus observed ID/status. Only
@@ -98,6 +101,113 @@ unsupported events, roles, block types and diagnostics. Unrecognized type/role
 strings are bucketed as `other` so source-controlled text never leaks to stdout.
 Diagnostic counts count affected events once per code, not affected blocks.
 `coverage: partial` means a known gap; `no_known_gaps` is not corpus completeness.
+
+## Claude identity and relationship evidence
+
+`claude-code-jsonl` uses provider `claude`, adapter `claude-1`, and the same
+two-pass reader, event identity formula, source-integrity and private-output
+rules. One physical source line still produces exactly one event. Claude does
+not use a special session metadata line or infer identity from a filename.
+
+`native_session_id` retains the one nonempty string observed as root `sessionId`
+verbatim. `native_agent_id` independently retains observed `agentId`. Conflicting
+nonempty `sessionId` values fail with `conflicting_native_session_ids`;
+conflicting nonempty `agentId` values fail with `conflicting_native_agent_ids`.
+The unsupported `session_id` alias stays raw with diagnostics, even when a valid
+`sessionId` is also present. It never supplies or reconciles native identity.
+
+Identity classification requires at least one top-level `user`/`assistant`
+record and an observed native root ID:
+
+* `session_kind: main`: every conversational record has a nonempty `sessionId`
+  and literal `isSidechain: false`; no parsed object contains `agentId`.
+  Metadata records may omit `isSidechain`. The normalized ID is `claude:` plus
+  the exact root ID.
+* `session_kind: subagent`: every parsed object has literal `isSidechain: true`
+  and a nonempty `agentId`; each conversational record also has a nonempty
+  `sessionId`. The normalized ID is `claude-subagent:` plus SHA-256 of compact,
+  sorted-key, ASCII JSON encoding of `[root_session_id, agent_id]`. Structured
+  encoding avoids delimiter collisions for arbitrary opaque IDs.
+* Otherwise, `session_kind: unresolved`, `session_id: null` and an
+  `ambiguous_thread_identity` diagnostic preserve the gap. Observed native IDs
+  remain available separately. Present but invalid ID/sidechain fields also
+  prevent classification. Invalid/non-object lines cannot supply identity
+  evidence and retain their own event diagnostics.
+
+Conflicting boolean sidechain declarations fail with
+`conflicting_claude_sidechain_metadata`; a nonempty agent ID combined with an
+observed false sidechain fails with `conflicting_claude_thread_metadata`.
+No output is published on these conflicts. These are conservative source-evidence
+rules, not authentication of a source's claims.
+
+Only a classified subagent exposes `parent_session_id: claude:<root ID>` and
+`parent_session_relation: observed_main_session_context`. This indicates the
+main session context recorded by the source, not proof of spawn origin or an
+immediate parent agent. `parentUuid` is a record-to-record edge; it never becomes
+a parent session. No cross-file reconstruction, stitching or deduplication occurs.
+
+The header's `observed_metadata` stores the first observed `sessionId`, `agentId`,
+`isSidechain` and timestamp fields, with `metadata_evidence` containing the exact
+record locator and field pointer. `native_identity_evidence` separately points
+to the first valid native ID fields (the first observed value may be invalid).
+Every event retains observed `sessionId`, `uuid`, `parentUuid`, `isSidechain`,
+`agentId`, `sourceToolAssistantUUID`, `sourceToolUseID` and `isMeta` in its
+`observed_metadata`, with exact `metadata_pointers`. These fields do not prove
+spawn or tool pairing. All other keys remain in `source_record`.
+
+## Claude messages, interactions and coverage
+
+Top-level `user` and `assistant` records with a message object produce `message`
+events. Role comes from `message.role`; it is never filled from the top-level
+type. Canonical fields retain observed `role`, `content`, `id`, `type`,
+`stop_reason`, `stop_sequence`, `usage`, `model` and `status`, including unexpected
+values. Each field has an exact pointer under `/message`. String content remains
+a string, with no synthetic source blocks. Lists preserve every block in order,
+with `/message/content/<index>` block pointers. Missing/invalid role/content or
+message shapes receive diagnostics. Full source records and unknown fields stay
+intact. Timestamps come only from the top-level field with `/timestamp` provenance.
+
+Text blocks support string `text`. Thinking blocks retain string `thinking` and
+an optional opaque string `signature`; this is supplied content, not a claim of
+complete internal reasoning. Images, documents, redacted material, malformed
+blocks and unknown block types remain present with coverage diagnostics.
+
+Every Claude event has an `interactions` list (empty outside applicable messages).
+Each ordered `tool_use`/`tool_result` block produces one interaction:
+
+* `kind: tool_call` maps observed block `id` to canonical `call_id`, retaining
+  `name` and opaque `input` (expected to be a dict).
+* `kind: tool_result` maps observed `tool_use_id` to `call_id`, `content` to
+  `output`, and retains `is_error` (expected to be a bool). String and ordered-list
+  outputs stay unchanged. Structured output blocks also have exact
+  `output_block_pointers`; unknown/non-text output blocks remain explicit gaps.
+* Each interaction has its original `block_index`, `block_pointer`, per-field
+  `field_pointers`, and `outcome: unknown`. Its original block remains in the
+  containing event's complete `source_record`. Missing fields are omitted from
+  canonical values and diagnosed; invalid values are retained and diagnosed.
+  Opaque unexpected output shapes are retained too. No ID pairing, string parsing,
+  command execution or success inference occurs, even for `is_error: false`.
+
+Claude summaries add `tool_interactions` and `tool_interaction_types` with fixed
+`tool_call`/`tool_result` counts. `events` and `canonical_events` continue to count
+source-record events: a message containing three tool blocks is one message event
+and three interactions, not four events. Block/role/type vocabularies and all
+diagnostics are bounded; unknown strings go into `other`, never stdout. Diagnostic
+counts count affected source events once per code, not individual interactions.
+Codex summary keys and count semantics are unchanged.
+
+Recognized metadata types are `system`, `mode`, `permission-mode`,
+`file-history-snapshot`, `atis-latch`, `attachment`, `last-prompt`, `ai-title` and
+`queue-operation`. They are `source_metadata`, not reconstructed conversations or
+deep semantic interpretations. Unknown top-level types remain `unsupported`.
+`progress` stays unsupported with `projection_not_reconciled`; no projected tool
+or message is promoted. Known summary/compaction markers (`summary`, `compaction`,
+`compact_boundary`, `compactMetadata`, `isCompactSummary: true`) add
+`compacted_evidence`. A top-level compaction-marked conversational record stays
+unsupported rather than expanding into hypothetical original messages. Explicit
+redaction/encryption markers add evidence-gap diagnostics. Detection is limited
+to modeled record/message/content-block locations, not a recursive interpretation
+of arbitrary opaque payloads. No full-history or corpus-wide support is claimed.
 
 ## Resource, error, and privacy boundaries
 
@@ -138,3 +248,10 @@ and never prints source content. It does not authenticate canonical values or
 replace source-to-output validation. Raw and normalized contents are private;
 only synthetic tests and implementation belong in git. Real validation reports
 contain exact selected paths, stats/hashes, counts and equality checks only.
+Claude inspection also checks provider/adapter compatibility, header identity
+consistency, interaction ordering and unknown outcomes. The operator's
+`scripts/validate_source.py --format claude-code-jsonl` check compares original
+records, message/relationship/interaction values and pointers, repeat imports,
+copied-source identities and source fingerprints. That validator requires valid
+object-shaped JSONL; invalid/non-object lines fail validation even though the
+normalizer preserves them. Synthetic validator tests are not real-input proof.

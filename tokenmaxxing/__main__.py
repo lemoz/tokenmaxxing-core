@@ -9,7 +9,7 @@ from .records import NormalizationError
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Normalize an explicit Codex source to a new private file.")
+    parser = argparse.ArgumentParser(description="Normalize an explicit Codex or Claude source to a new private file.")
     commands = parser.add_subparsers(dest="command", required=True)
     importer = commands.add_parser("normalize")
     importer.add_argument("--source", required=True)

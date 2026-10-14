@@ -8,11 +8,12 @@ import stat
 import tempfile
 
 from . import ADAPTER_VERSION, SCHEMA_VERSION
+from . import claude
 from .events import event, metadata
 from .records import NormalizationError, Reader, encode, loads
 from .summary import Summary
 
-FORMATS = ("codex-jsonl", "codex-legacy-json")
+FORMATS = ("codex-jsonl", "codex-legacy-json", claude.FORMAT)
 
 
 def signature(info):
@@ -29,6 +30,8 @@ def regular_source(path):
 
 
 def _header(reader, source, info):
+    if reader.source_format == claude.FORMAT:
+        return claude.header(reader, source, info)
     selected = None
     native_id = None
     count = 0
@@ -109,12 +112,14 @@ def normalize(source, output, source_format):
                 raise NormalizationError("source_changed_during_import")
             stream.seek(0)
             second = Reader(stream, source_format)
-            summary = Summary(header["diagnostics"])
+            summary_class = claude.ClaudeSummary if source_format == claude.FORMAT else Summary
+            make_event = claude.event if source_format == claude.FORMAT else event
+            summary = summary_class(header["diagnostics"])
             descriptor, temporary = tempfile.mkstemp(prefix=".tokenmaxxing-", dir=destination.parent)
             with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as out:
                 out.write(encode(header) + "\n")
                 for order, record in enumerate(second):
-                    value = event(record, source_format, header["session_id"], header["source"]["sha256"], order)
+                    value = make_event(record, source_format, header["session_id"], header["source"]["sha256"], order)
                     summary.add(value)
                     out.write(encode(value) + "\n")
                 if (second.digest.hexdigest() != first.digest.hexdigest()
@@ -143,8 +148,6 @@ def inspect(source):
             header = loads(stream.readline().decode("utf-8"))
             if (not isinstance(header, dict) or header.get("record_kind") != "session"
                     or header.get("schema_version") != SCHEMA_VERSION
-                    or header.get("adapter_version") != ADAPTER_VERSION
-                    or header.get("provider") != "codex"
                     or any(key not in header or (header[key] is not None and
                            (not isinstance(header[key], str) or not header[key]))
                            for key in ("session_id", "native_session_id"))
@@ -156,7 +159,14 @@ def inspect(source):
                     or type(header.get("source_records")) is not int
                     or header["source_records"] < 0):
                 raise NormalizationError("invalid_normalized_header")
-            summary = Summary(header.get("diagnostics"))
+            is_claude = header["source"]["format"] == claude.FORMAT
+            adapter_version = claude.ADAPTER_VERSION if is_claude else ADAPTER_VERSION
+            if (header.get("adapter_version") != adapter_version or
+                    header.get("provider") != ("claude" if is_claude else "codex") or
+                    (is_claude and not claude.valid_header(header))):
+                raise NormalizationError("invalid_normalized_header")
+            summary_class = claude.ClaudeSummary if is_claude else Summary
+            summary = summary_class(header.get("diagnostics"))
             footer = None
             for raw in stream:
                 value = loads(raw.decode("utf-8"))
@@ -170,7 +180,7 @@ def inspect(source):
                         or value.get("source_revision_id") != header["source"]["sha256"]
                         or value.get("outcome") != "unknown"):
                     raise NormalizationError("invalid_normalized_event")
-                identity = [SCHEMA_VERSION, ADAPTER_VERSION, header["source"]["format"], header["session_id"],
+                identity = [SCHEMA_VERSION, adapter_version, header["source"]["format"], header["session_id"],
                             header["source"]["sha256"], value["order"], value["locator"]]
                 expected = "event:" + hashlib.sha256(encode(identity).encode()).hexdigest()
                 if value.get("event_id") != expected:

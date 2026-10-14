@@ -96,6 +96,31 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.store.evidence(query='\\ud800')['total'], 1)
         self.assertEqual(self.imported()['added_records'], 0)
 
+    def test_native_session_identity_retains_lone_surrogates(self):
+        from tokenmaxxing.normalize import inspect, normalize
+        for name, fmt in [('synthetic-codex.jsonl', 'codex-jsonl'),
+                          ('synthetic-claude.jsonl', 'claude-code-jsonl')]:
+            with self.subTest(fmt=fmt):
+                source = self.inputs / name
+                records = [json.loads(line) for line in source.read_text().splitlines()]
+                if fmt == 'codex-jsonl':
+                    records[0]['payload']['id'] = '\ud800'
+                else:
+                    for record in records:
+                        record['sessionId'] = '\ud800'
+                source.write_text(''.join(json.dumps(record, ensure_ascii=True) + '\n' for record in records))
+                output = self.root / fmt; output.mkdir(mode=0o700)
+                normalized = output / 'session.jsonl'
+                summary = normalize(source, normalized, fmt)
+                self.assertEqual(inspect(normalized), summary)
+                header = json.loads(normalized.read_text().splitlines()[0])
+                imported = self.imported(name, fmt, fmt)
+                session = self.store.sessions(project=fmt)['items'][0]
+                self.assertEqual(session['header'], header)
+                self.assertEqual(session['native_identity'], header['session_id'])
+                self.assertEqual(self.imported(name, fmt, fmt)['added_records'], 0)
+                self.assertEqual(len(self.evidence(imported)), summary['events'])
+
     def test_outcome_match_mismatch_empty_missing_report_and_dedup(self):
         imported = self.imported(); event = self.evidence(imported)[1]['id']
         args = dict(session_id=imported['session_id'], evidence=[event], kind='check',

@@ -78,7 +78,7 @@ async function refresh() {
     [scoped.records, 'Current revision records'], [scoped.sessions, 'Imported session contexts'], [countOutcomes, 'Outcome receipts · all revisions']
   ].map(([value, title]) => el('div', {class: 'stat'}, el('strong', {}, value), el('span', {}, title))));
   const view = {import: renderImport, history: renderHistory, profile: renderProfile, outcomes: renderOutcomes}[s.view];
-  const result = await view({...ctx, overview});
+  const result = await view({...ctx, overview, isCurrent: () => ticket === generation});
   if (ticket === generation) document.querySelector('#content').replaceChildren(result);
 }
 async function navigate(view, changes = {}) {

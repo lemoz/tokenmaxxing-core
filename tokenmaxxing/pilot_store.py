@@ -176,7 +176,7 @@ class Store:
                             observed = now()
                             if existing is None:
                                 self.db.execute("INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?)",
-                                                (session_id, header["provider"], source_format, header["session_id"],
+                                                (session_id, header["provider"], source_format, encode(header["session_id"]),
                                                  project, revision, observed, observed))
                             if added:
                                 self.db.execute("INSERT INTO revisions VALUES (?,?,?,?,?,?)",
@@ -227,7 +227,8 @@ class Store:
             total = db.execute("SELECT COUNT(*) FROM sessions s " + where, args).fetchone()[0]
             rows = db.execute("""SELECT s.*, r.header, r.summary FROM sessions s JOIN revisions r ON r.id=s.current_revision
                                """ + where + " ORDER BY s.created_at,s.id LIMIT ? OFFSET ?", args + [limit, offset])
-            items = [{**dict(row), "header": loads(row["header"]), "summary": loads(row["summary"])} for row in rows]
+            items = [{**dict(row), "header": loads(row["header"]), "summary": loads(row["summary"]),
+                      "native_identity": loads(row["header"])["session_id"]} for row in rows]
             return {"items": items, "total": total, "offset": offset, "limit": limit}
 
     def revisions(self, session_id):

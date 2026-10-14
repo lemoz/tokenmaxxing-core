@@ -16,10 +16,12 @@ export async function renderOutcomes(c) {
   const {s, api, run, refresh, notice} = c;
   if (!c.overview.sessions) return empty('Import evidence before recording an outcome. Every check and report requires an exact evidence link.');
   const sessions = await api('/api/sessions', undefined, {project: s.project, offset: s.sessionOffset});
+  if (!c.isCurrent()) return null;
   if (!s.outcomeSession && sessions.items.length) s.outcomeSession = sessions.items[0].id;
   let revisionPage;
   try { revisionPage = s.outcomeSession ? await api('/api/revisions', undefined, {session_id: s.outcomeSession}) : {items: []}; }
   catch (_) {
+    if (!c.isCurrent()) return null;
     s.outcomeSession = sessions.items.length ? sessions.items[0].id : '';
     s.outcomeRevision = ''; s.selectedEvidence.clear();
     revisionPage = s.outcomeSession ? await api('/api/revisions', undefined, {session_id: s.outcomeSession}) : {items: []};

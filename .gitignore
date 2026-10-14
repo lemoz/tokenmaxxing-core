@@ -13,3 +13,7 @@ outputs/
 *.db
 *.db-wal
 *.db-shm
+.scratch/
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm

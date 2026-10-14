@@ -8,12 +8,12 @@ import stat
 import tempfile
 
 from . import ADAPTER_VERSION, SCHEMA_VERSION
-from . import claude
+from . import claude, hermes
 from .events import event, metadata
 from .records import NormalizationError, Reader, encode, loads
 from .summary import Summary
 
-FORMATS = ("codex-jsonl", "codex-legacy-json", claude.FORMAT)
+FORMATS = ("codex-jsonl", "codex-legacy-json", claude.FORMAT, hermes.FORMAT)
 
 
 def signature(info):
@@ -92,7 +92,7 @@ def _destination(source, output):
     return parent / output.name
 
 
-def normalize(source, output, source_format):
+def normalize(source, output, source_format, *, selected_session=None, source_opener=regular_source):
     """Write one new private artifact; return only a content-free summary.
 
     No overwrite, append, database writes, auto-discovery, or tool execution.
@@ -102,9 +102,15 @@ def normalize(source, output, source_format):
         raise NormalizationError("unsupported_source_format")
     source = Path(source).resolve(strict=True)
     destination = _destination(source, output)
+    if source_format == hermes.FORMAT:
+        with source_opener(source) as stream:
+            source_identity = os.fstat(stream.fileno())
+            return hermes.normalize(source, destination, selected_session, source_identity=source_identity)
+    if selected_session is not None:
+        raise NormalizationError("selected_session_only_for_hermes")
     temporary = None
     try:
-        with regular_source(source) as stream:
+        with source_opener(source) as stream:
             initial = os.fstat(stream.fileno())
             first = Reader(stream, source_format)
             header = _header(first, source, initial)
@@ -160,12 +166,14 @@ def inspect(source):
                     or header["source_records"] < 0):
                 raise NormalizationError("invalid_normalized_header")
             is_claude = header["source"]["format"] == claude.FORMAT
-            adapter_version = claude.ADAPTER_VERSION if is_claude else ADAPTER_VERSION
+            is_hermes = header["source"]["format"] == hermes.FORMAT
+            adapter_version = hermes.ADAPTER_VERSION if is_hermes else claude.ADAPTER_VERSION if is_claude else ADAPTER_VERSION
             if (header.get("adapter_version") != adapter_version or
-                    header.get("provider") != ("claude" if is_claude else "codex") or
+                    header.get("provider") != ("hermes" if is_hermes else "claude" if is_claude else "codex") or
                     (is_claude and not claude.valid_header(header))):
                 raise NormalizationError("invalid_normalized_header")
-            summary_class = claude.ClaudeSummary if is_claude else Summary
+            verifier = hermes.Inspector(header) if is_hermes else None
+            summary_class = hermes.HermesSummary if is_hermes else claude.ClaudeSummary if is_claude else Summary
             summary = summary_class(header.get("diagnostics"))
             footer = None
             for raw in stream:
@@ -185,10 +193,14 @@ def inspect(source):
                 expected = "event:" + hashlib.sha256(encode(identity).encode()).hexdigest()
                 if value.get("event_id") != expected:
                     raise NormalizationError("invalid_event_identity")
+                if verifier:
+                    verifier.add(value)
                 summary.add(value)
             result = summary.result()
             if footer != {"record_kind": "summary", **result} or summary.events != header["source_records"]:
                 raise NormalizationError("missing_or_inconsistent_summary")
+            if verifier:
+                verifier.finish()
             return result
     except (ValueError, UnicodeError, KeyError, TypeError, RecursionError):
         raise NormalizationError("invalid_normalized_structure") from None

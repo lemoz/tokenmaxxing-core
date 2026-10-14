@@ -1,6 +1,6 @@
 # Tokenmaxxing development
 
-Tokenmaxxing is an independent session-normalization foundation for future evidence-backed work profiles. The current implementation supports Codex JSONL, legacy session/items JSON, and explicit Claude Code JSONL normalization and inspection. Claude main/subagent identity uses observed structured metadata; tool blocks are interactions within message events. Hermes, work profiles and rankings are not implemented yet.
+Tokenmaxxing is an independent session-normalization foundation with a private local evidence pilot. The implementation supports Codex JSONL, legacy session/items JSON, explicit Claude Code JSONL, and conservative selected-session Hermes SQLite normalization and inspection. Hermes native validation is pending; synthetic tests do not satisfy it. Claude main/subagent identity uses observed structured metadata; tool blocks are interactions within message events. The pilot adds private persistent history, correctable project grouping, an evidence ledger and scoped outcome checks. Rankings and public launch remain out of scope.
 
 ## Repository boundaries
 
@@ -12,6 +12,7 @@ Tokenmaxxing is an independent session-normalization foundation for future evide
 - Preserve unsupported records and coverage gaps. Source statuses and agent claims do not prove completed work or successful outcomes.
 - Claude `parentUuid` is a record edge. A subagent's `parent_session_id` identifies observed main session context, not verified spawn origin or an immediate parent agent. Never infer identity from paths or reconcile the unsupported `session_id` alias.
 - Keep one event per source record. Claude interaction counts are additive and separate from canonical event counts. Preserve existing Codex identities, normalized bytes and summary semantics when changing shared infrastructure.
+- Keep the pilot store outside the code repository. Source/artifact grants are explicit at startup; no autodiscovery. Current profiles count only each session's most recently selected revision, with historical evidence and checks retained visibly. Artifact checks require explicit expected SHA256 and linked evidence; they establish byte assertions only.
 
 ## Development workflow
 

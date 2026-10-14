@@ -6,9 +6,11 @@ All event and interaction outcomes are `unknown`, even with a source `status`,
 `task_complete`, `stop_reason` or `is_error`.
 Source status values remain unchanged in `canonical` and/or `source_record`.
 Explicit formats are `codex-jsonl`, `codex-legacy-json` and `claude-code-jsonl`.
-Hermes, persistent imports, evidence profiles and category leaderboards are later
-work. The Claude view is additive; Codex bytes, identities and summaries retain
-the `codex-1` contract.
+This document covers standalone Codex/Claude normalization. The private pilot's
+persistent imports, evidence ledger and experimental Hermes adapter are specified
+in [Private pilot operation and acceptance](private-pilot.md). Category leaderboards
+remain future work. The Claude view is additive; Codex bytes, identities and
+summaries retain the `codex-1` contract.
 
 ## Artifact and ordering
 

@@ -187,7 +187,7 @@ class Store:
                                     if value["record_kind"] == "summary":
                                         break
                                     searchable = json.dumps([value["canonical"], value.get("interactions", []),
-                                                             value["locator"], value["source_record"]], ensure_ascii=False).lower()
+                                                             value["locator"], value["source_record"]], ensure_ascii=False).encode("utf-8", "backslashreplace").decode("utf-8").lower()
                                     self.db.execute("INSERT INTO events VALUES (?,?,?,?,?,?)",
                                                     (value["event_id"], revision, value["order"], category(value),
                                                      encode(value), searchable))

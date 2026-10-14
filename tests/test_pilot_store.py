@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import hashlib
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -76,6 +77,24 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.store.evidence(project='absent')['total'], 0)
         self.assertEqual(self.store.evidence(category_filter='intent')['total'], 1)
         self.assertEqual(self.store.evidence(session_id=result['session_id'], offset=4)['total'], 5)
+
+    def test_search_retains_lone_surrogates_and_normal_unicode(self):
+        from tokenmaxxing.normalize import inspect, normalize
+        source = self.inputs / 'synthetic-codex.jsonl'
+        records = [json.loads(line) for line in source.read_text().splitlines()]
+        retained = {'surrogate': '\ud800', 'unicode': 'café 世界'}
+        records[0]['unknown_text'] = retained
+        source.write_text('\n'.join(json.dumps(row, ensure_ascii=True) for row in records) + '\n')
+        output = self.root / 'normalized'; output.mkdir(mode=0o700)
+        normalized = output / 'session.jsonl'
+        summary = normalize(source, normalized, 'codex-jsonl')
+        self.assertEqual(inspect(normalized), summary)
+        imported = self.imported()
+        rows = self.evidence(imported)
+        self.assertEqual(self.store.detail(rows[0]['id'])['body']['source_record']['unknown_text'], retained)
+        self.assertEqual(self.store.evidence(query='café 世界')['total'], 1)
+        self.assertEqual(self.store.evidence(query='\\ud800')['total'], 1)
+        self.assertEqual(self.imported()['added_records'], 0)
 
     def test_outcome_match_mismatch_empty_missing_report_and_dedup(self):
         imported = self.imported(); event = self.evidence(imported)[1]['id']

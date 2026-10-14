@@ -41,14 +41,22 @@ async function api(route, data, query = {}) {
   if (!response.ok) throw new Error(response.status === 401 ? 'Authorization required. Open the private launch URL from this running server; restart tokens are different.' : result.error || 'Local request failed.');
   return result;
 }
+let pendingActions = 0;
+let disabledControls = [];
 async function run(action, pending = 'Saving to private storage…') {
   notice(pending);
-  const controls = [...document.querySelectorAll('button')];
-  const disabled = controls.map(c => c.disabled);
-  controls.forEach(c => c.disabled = true);
+  if (!pendingActions++) {
+    disabledControls = [...document.querySelectorAll('button')].map(control => [control, control.disabled]);
+  }
+  disabledControls.forEach(([control]) => control.disabled = true);
   try { await action(); }
   catch (error) { notice(error.message || 'Local request failed. Your form is available to retry.', true); }
-  finally { controls.forEach((c, i) => c.disabled = disabled[i]); }
+  finally {
+    if (!--pendingActions) {
+      disabledControls.forEach(([control, disabled]) => control.disabled = disabled);
+      disabledControls = [];
+    }
+  }
 }
 async function refresh() {
   const ticket = ++generation;

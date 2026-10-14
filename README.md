@@ -2,13 +2,29 @@
 
 An independent session-normalization foundation for evidence-backed work profiles.
 
-The current slice supports Codex JSONL, older Codex `session`/`items` JSON, and Claude Code JSONL. It preserves source provenance, provides conservative canonical message/tool views, and makes missing or unsupported evidence explicit. It does not infer accomplishments, score users or rank token usage.
+The core supports Codex JSONL, older Codex `session`/`items` JSON, Claude Code JSONL, and an explicit selected-session Hermes SQLite adapter built against synthetic stores. It preserves provenance, provides conservative canonical message/tool views, and makes missing or unsupported evidence explicit. Native Hermes validation remains pending.
 
-Hermes, work profiles, outcome checks and niche-specific leaderboards are future work.
+A private local pilot adds persistent imports, project grouping, searchable history, an evidence-linked work ledger and scoped artifact checks. First start is empty. It does not infer accomplishments or expertise, score users, or rank token usage. Rankings and public launch are outside this pilot.
+
+## Private evidence workbench
+
+```sh
+python3 -m tokenmaxxing serve \
+  --store /absolute/private/pilot \
+  --allow-source /explicit/history/file-or-root \
+  --allow-artifact /explicit/artifact/file-or-root \
+  --port 8765 --open-browser
+```
+
+The parent directory must already exist. The pilot creates its storage root with mode 0700 and its SQLite files with mode 0600. Storage must be outside the source repository. Existing unsafe permissions, links and unrelated directory contents are refused; nothing is automatically chmodded. Use canonical absolute paths without symlinks (on macOS, `/private/tmp`, not `/tmp`). No read roots are granted by default.
+
+The server binds only `127.0.0.1`. Each process has a fresh bearer token, passed to the browser in a URL fragment and removed from the address bar. The browser keeps it in session storage for reloads. `--open-browser` avoids printing the private URL; without that flag an interactive terminal prints it. Redirected output contains no token. Stop with Ctrl-C and relaunch to reopen the persistent store; reopen the new private launch URL after a restart.
+
+Read [private pilot operation and acceptance](docs/private-pilot.md) for storage semantics, the deterministic **synthetic** fixture recipe, exact browser controls, security boundaries and pending native/browser/review checks. Import only histories you are authorized to read; native Hermes compatibility is not yet verified.
 
 ## Run locally
 
-Python 3.9+ standard library. No package installation, service, network or database is needed to run the normalizer. CI exercises Python 3.11.
+Python 3.9+ standard library on POSIX (macOS/Linux for the private pilot). No package installation, provider connection or cloud service is needed. File normalizers remain independently useful; Hermes uses read-only SQLite. The pilot uses local HTTP and a separate SQLite store. CI exercises Python 3.11.
 
 ```sh
 git clone https://github.com/lemoz/tokenmaxxing-core.git
@@ -56,7 +72,18 @@ Exit codes:
 - 2: failed; no normalized output published by the normalizer.
 - 3: output produced with explicit missing or unsupported evidence.
 
-Neither exit 0 nor a source status means successful work or a complete work history. Repeated unchanged inputs and unchanged copies have stable event identities. This is not a persistent ingestion store or cross-history deduplication system. JSONL is processed incrementally; legacy JSON is parsed in memory.
+Neither exit 0 nor a source status means successful work or a complete work history. Repeated unchanged inputs and unchanged copies have stable event identities. Standalone normalization does not itself maintain an ingestion store. The separate pilot deduplicates explicit native identities within provider/format and retains immutable source revisions. JSONL is processed incrementally; legacy JSON is parsed in memory.
+
+Explicit selected Hermes normalization:
+
+```sh
+python3 -m tokenmaxxing normalize --source /explicit/synthetic-hermes.sqlite3 \
+  --format hermes-sqlite --selected-session synthetic-hermes \
+  --output /absolute/private/hermes.normalized.jsonl
+python3 -m tokenmaxxing inspect --source /absolute/private/hermes.normalized.jsonl
+```
+
+Hermes output always includes `native_validation_pending` and exits 3. The selected snapshot digest covers the complete retained session/message rows and column inventory, not the SQLite file or other sessions. No schema version is asserted as current native proof. See [Hermes snapshot details](docs/private-pilot.md#hermes-snapshot-contract).
 
 ## Private source validation
 

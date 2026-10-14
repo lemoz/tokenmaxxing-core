@@ -21,9 +21,15 @@ def bucket(value, known):
 
 
 class Summary:
+    session_codes = SESSION_DIAGNOSTICS
+    diagnostic_codes = DIAGNOSTICS
+    source_types = SOURCE_TYPES
+    subtypes_vocabulary = SUBTYPES
+    block_types = {"input_text", "output_text"}
+
     def __init__(self, session_diagnostics):
         if (not isinstance(session_diagnostics, list) or
-                any(not isinstance(x, str) or x not in SESSION_DIAGNOSTICS for x in session_diagnostics)):
+                any(not isinstance(x, str) or x not in self.session_codes for x in session_diagnostics)):
             raise NormalizationError("invalid_session_diagnostics")
         self.session_diagnostics = sorted(set(session_diagnostics))
         self.events = 0
@@ -42,12 +48,12 @@ class Summary:
         diagnostics = value.get("diagnostics")
         if not isinstance(canonical, dict) or not isinstance(diagnostics, list):
             raise NormalizationError("invalid_event_shape")
-        if any(not isinstance(x, str) or x not in DIAGNOSTICS for x in diagnostics):
+        if any(not isinstance(x, str) or x not in self.diagnostic_codes for x in diagnostics):
             raise NormalizationError("invalid_event_diagnostics")
         self.events += 1
         self.kinds[kind] += 1
-        self.types[bucket(value.get("source_type"), SOURCE_TYPES)] += 1
-        self.subtypes[bucket(value.get("source_subtype"), SUBTYPES)] += 1
+        self.types[bucket(value.get("source_type"), self.source_types)] += 1
+        self.subtypes[bucket(value.get("source_subtype"), self.subtypes_vocabulary)] += 1
         self.diagnostics.update(set(diagnostics))
         if kind == "message":
             self.roles[bucket(canonical.get("role"), ROLES)] += 1
@@ -55,7 +61,7 @@ class Summary:
             if isinstance(content, list):
                 for block in content:
                     self.blocks[bucket(block.get("type") if isinstance(block, dict) else None,
-                                       {"input_text", "output_text"})] += 1
+                                       self.block_types)] += 1
 
     def result(self):
         return {

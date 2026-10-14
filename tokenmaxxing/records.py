@@ -56,7 +56,7 @@ class Reader:
         self.bytes_read += len(raw)
 
     def __iter__(self):
-        if self.source_format == "codex-jsonl":
+        if self.source_format in ("codex-jsonl", "claude-code-jsonl"):
             yield from self._jsonl()
         elif self.source_format == "codex-legacy-json":
             yield from self._legacy()

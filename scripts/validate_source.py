@@ -53,7 +53,7 @@ def resolve(value, pointer):
 
 def source_records(source, fmt):
     with source.open("rb") as stream:
-        if fmt == "codex-jsonl":
+        if fmt in ("codex-jsonl", "claude-code-jsonl"):
             offset = 0
             for line, raw in enumerate(stream, 1):
                 value = json.loads(raw)
@@ -70,6 +70,85 @@ def source_records(source, fmt):
                 yield root, value, {"pointer": f"/items/{index}", "item_index": index}
 
 
+def compare_claude(raw, event, header, checks):
+    """Independent value/locator assertions for parsed, object-shaped Claude lines.
+
+    Invalid lines intentionally fail this validator; normalization retains them.
+    No source strings are placed in assertion messages or the report.
+    """
+    check(isinstance(raw, dict), "unsupported_validation_record_shape")
+    if isinstance(raw.get("sessionId"), str) and raw["sessionId"]:
+        check(header["native_session_id"] == raw["sessionId"], "native_id_mismatch")
+    if isinstance(raw.get("agentId"), str) and raw["agentId"]:
+        check(header["native_agent_id"] == raw["agentId"], "native_agent_id_mismatch")
+    if header["session_kind"] == "main":
+        check("agentId" not in raw and ("isSidechain" not in raw or raw["isSidechain"] is False),
+              "main_identity_evidence_mismatch")
+    elif header["session_kind"] == "subagent":
+        check(raw.get("isSidechain") is True and raw.get("agentId") == header["native_agent_id"],
+              "subagent_identity_evidence_mismatch")
+    if raw.get("type") in ("user", "assistant") and header["session_kind"] != "unresolved":
+        check(raw.get("sessionId") == header["native_session_id"] and
+              raw.get("isSidechain") is (header["session_kind"] == "subagent"), "message_identity_evidence_mismatch")
+    compacted = (raw.get("isCompactSummary") is True or "compactMetadata" in raw or
+                 raw.get("subtype") == "compact_boundary")
+    eligible = raw.get("type") in ("user", "assistant") and isinstance(raw.get("message"), dict) and not compacted
+    expected = {key: raw["message"][key] for key in (
+        "role", "content", "id", "type", "stop_reason", "stop_sequence", "usage", "model", "status")
+        if key in raw["message"]} if eligible else {}
+    check(event["canonical"] == expected, "canonical_fields_mismatch")
+    if eligible:
+        check(event["kind"] == "message", "canonical_kind_mismatch")
+        checks["message"] += 1
+    for key, value in expected.items():
+        check(resolve(raw, event["field_pointers"][key]) == value, "canonical_pointer_mismatch")
+        checks["canonical_fields"] += 1
+    metadata = {key: raw[key] for key in ("sessionId", "uuid", "parentUuid", "isSidechain", "agentId",
+                "sourceToolAssistantUUID", "sourceToolUseID", "isMeta") if key in raw}
+    check(event["observed_metadata"] == metadata, "record_metadata_mismatch")
+    for key, value in metadata.items():
+        check(resolve(raw, event["metadata_pointers"][key]) == value, "metadata_pointer_mismatch")
+        checks["record_metadata_fields"] += 1
+    for key, evidence in header["metadata_evidence"].items():
+        if evidence["locator"] == event["locator"]:
+            check(resolve(raw, evidence["field_pointer"]) == header["observed_metadata"][key], "header_metadata_pointer_mismatch")
+    for key, evidence in header["native_identity_evidence"].items():
+        if evidence["locator"] == event["locator"]:
+            native_key = "native_session_id" if key == "sessionId" else "native_agent_id"
+            check(resolve(raw, evidence["field_pointer"]) == header[native_key], "native_identity_pointer_mismatch")
+    content = expected.get("content")
+    blocks = content if isinstance(content, list) else []
+    check(len(event["block_pointers"]) == len(blocks), "block_count_mismatch")
+    for pointer, block in zip(event["block_pointers"], blocks):
+        check(resolve(raw, pointer) == block, "block_pointer_mismatch")
+        checks["content_blocks"] += 1
+    expected_interactions = [(index, block) for index, block in enumerate(blocks)
+                             if isinstance(block, dict) and block.get("type") in ("tool_use", "tool_result")]
+    check(len(expected_interactions) == len(event["interactions"]), "interaction_count_mismatch")
+    for (index, block), item in zip(expected_interactions, event["interactions"]):
+        call = block["type"] == "tool_use"
+        fields = {"call_id": "id", "name": "name", "input": "input"} if call else {
+            "call_id": "tool_use_id", "output": "content", "is_error": "is_error"}
+        values = {key: block[source] for key, source in fields.items() if source in block}
+        check(item["kind"] == ("tool_call" if call else "tool_result"), "interaction_kind_mismatch")
+        check(item["canonical"] == values, "interaction_fields_mismatch")
+        check(item["outcome"] == "unknown", "inferred_interaction_outcome")
+        check(item["block_index"] == index and resolve(raw, item["block_pointer"]) == block, "interaction_block_mismatch")
+        for key, value in values.items():
+            check(resolve(raw, item["field_pointers"][key]) == value, "interaction_pointer_mismatch")
+            checks["interaction_fields"] += 1
+        outputs = values.get("output")
+        outputs = outputs if isinstance(outputs, list) else []
+        check(len(item["output_block_pointers"]) == len(outputs), "output_block_count_mismatch")
+        for pointer, block in zip(item["output_block_pointers"], outputs):
+            check(resolve(raw, pointer) == block, "output_block_pointer_mismatch")
+            checks["output_blocks"] += 1
+        checks[item["kind"] + "_interactions"] += 1
+    if "timestamp" in raw:
+        check(resolve(raw, event["timestamp_pointer"]) == event["timestamp"], "timestamp_pointer_mismatch")
+    check(event["timestamp"] == raw.get("timestamp"), "timestamp_mismatch")
+
+
 def compare_source(source, output, fmt, baseline):
     checks = Counter()
     with output.open() as stream:
@@ -84,6 +163,9 @@ def compare_source(source, output, fmt, baseline):
             check(event["order"] == checks["records"], "event_order_mismatch")
             check(event["outcome"] == "unknown", "inferred_outcome")
             checks["records"] += 1
+            if fmt == "claude-code-jsonl":
+                compare_claude(root, event, header, checks)
+                continue
             if fmt == "codex-jsonl":
                 data = raw.get("payload", {})
                 canonical_eligible = raw.get("type") == "response_item"
@@ -143,7 +225,11 @@ def compare_imports(first, other, same_path):
         if same_path:
             check(left_header == right_header, "repeat_header_mismatch")
         else:
-            for key in ("session_id", "native_session_id", "observed_metadata"):
+            keys = ["session_id", "native_session_id", "observed_metadata"]
+            if left_header.get("provider") == "claude":
+                keys += ["native_agent_id", "session_kind", "parent_session_id", "parent_session_relation",
+                         "metadata_evidence", "native_identity_evidence"]
+            for key in keys:
                 check(left_header[key] == right_header[key], "copy_identity_mismatch")
         for a, b in itertools.zip_longest(left, right):
             check(a == b, "repeat_or_copy_event_mismatch")
@@ -170,7 +256,7 @@ def validate(source, fmt, directory):
     assertions = compare_source(source, first, fmt, before)
     repeated_summary = run_cli(["normalize", "--source", str(source), "--format", fmt, "--output", str(repeat)], commands)
     compare_imports(first, repeat, same_path=True)
-    copy = directory / ("unchanged-source-copy.jsonl" if fmt == "codex-jsonl" else "unchanged-source-copy.json")
+    copy = directory / ("unchanged-source-copy.json" if fmt == "codex-legacy-json" else "unchanged-source-copy.jsonl")
     with source.open("rb") as src, private_file(copy) as dst:
         for chunk in iter(lambda: src.read(1024 * 1024), b""):
             dst.write(chunk)
@@ -188,7 +274,7 @@ def validate(source, fmt, directory):
               "stable_repeat": True, "unchanged_copy_identity": True,
               "private_modes": True, "summary": summary, "commands": commands,
               "gaps": ["Selected-source proof only; no corpus-wide claim.",
-                       "Reasoning, projections, encrypted/compacted evidence remain explicit gaps.",
+                       "Unsupported blocks, projections, redacted/encrypted/compacted evidence remain gaps.",
                        "Legacy containers are in memory; no gigabyte legacy trial.",
                        "Tool outcomes and task success remain unknown."]}
     with private_file(directory / "validation-report.json") as stream:
@@ -201,7 +287,7 @@ def validate(source, fmt, directory):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
-    parser.add_argument("--format", choices=("codex-jsonl", "codex-legacy-json"), required=True)
+    parser.add_argument("--format", choices=("codex-jsonl", "codex-legacy-json", "claude-code-jsonl"), required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     try:

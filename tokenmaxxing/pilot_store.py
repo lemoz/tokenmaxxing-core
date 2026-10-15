@@ -106,8 +106,9 @@ class Store:
             self.db.execute("PRAGMA trusted_schema=OFF")
             if fresh:
                 self.db.executescript("BEGIN IMMEDIATE;" + SCHEMA + "COMMIT;")
-            elif self.db.execute("PRAGMA user_version").fetchone()[0] != 1:
-                raise NormalizationError("unsupported_private_store_version")
+            from .analysis_store import AnalysisLedger, migrate
+            migrate(self.db)
+            self.analysis = AnalysisLedger(self)
             self._check_files()
         except BaseException:
             self.close()
@@ -124,6 +125,8 @@ class Store:
             check_private_file(path)
 
     def close(self):
+        if getattr(self, "analysis", None) is not None:
+            self.analysis.close()
         if self.db is not None:
             self.db.close()
             self.db = None

@@ -3,11 +3,13 @@ import {renderImport} from './import.js';
 import {renderHistory, openEvidence} from './history.js';
 import {renderProfile} from './profile.js';
 import {renderOutcomes} from './outcomes.js';
+import {renderAnalysis} from './analysis.js';
 
-const titles = {import: 'Import selected sources', history: 'Inspect the evidence', profile: 'Project evidence ledger', outcomes: 'Record and check outcomes'};
+const titles = {import: 'Import selected sources', history: 'Inspect the evidence', analysis: 'Understand the work', profile: 'Evidence-linked work profile', outcomes: 'Record and check outcomes'};
 const descriptions = {
   import: 'Choose a format, a selected file and a project label. First start is empty; nothing is discovered automatically.',
   history: 'Inspect canonical messages beside exact source locators and retained records. Historical revisions remain accessible.',
+  analysis: 'Review selected excerpts, inspect a source-linked interpretation, and update the same work as evidence evolves.',
   profile: 'Recorded requests, observed evidence and outcome receipts stay separate. Grouping is your correctable label.',
   outcomes: 'Link exact evidence to an explicit byte assertion or an unverified human report.'
 };
@@ -61,6 +63,11 @@ async function run(action, pending = 'Saving to private storage…') {
 async function refresh() {
   const ticket = ++generation;
   const overview = await api('/api/overview');
+  const historical = await api('/api/analysis/projects');
+  for (const name of historical.projects) {
+    if (!overview.projects.some(p => p.project === name)) overview.projects.push({project: name, sessions: 0,
+      records: 0, intent: 0, observed: 0, retained: 0, outcomes: {}, historical_analysis: true});
+  }
   if (ticket !== generation) return;
   if (s.project && !overview.projects.some(p => p.project === s.project)) s.project = '';
   const project = document.querySelector('#global-project');
@@ -77,7 +84,7 @@ async function refresh() {
   document.querySelector('#stats').replaceChildren(...[
     [scoped.records, 'Current revision records'], [scoped.sessions, 'Imported session contexts'], [countOutcomes, 'Outcome receipts · all revisions']
   ].map(([value, title]) => el('div', {class: 'stat'}, el('strong', {}, value), el('span', {}, title))));
-  const view = {import: renderImport, history: renderHistory, profile: renderProfile, outcomes: renderOutcomes}[s.view];
+  const view = {import: renderImport, history: renderHistory, analysis: renderAnalysis, profile: renderProfile, outcomes: renderOutcomes}[s.view];
   const result = await view({...ctx, overview, isCurrent: () => ticket === generation});
   if (ticket === generation) document.querySelector('#content').replaceChildren(result);
 }

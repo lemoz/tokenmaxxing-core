@@ -288,6 +288,31 @@ class MappingTests(SyntheticFixtures, unittest.TestCase):
 
 class FileDiscoveryTests(SyntheticFixtures, unittest.TestCase):
 
+    def test_explicit_null_alias_file_never_published(self):
+        source = self.write([row()])
+        aliases = self.root / "aliases.json"
+        aliases.write_text("null", encoding="utf-8")
+        aliases.chmod(0o600)
+        output = self.root / "catalog.json"
+        result = self.cli("--metadata", source, "--aliases", aliases, "--output", output)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(json.loads(result.stderr), {"error": "invalid_alias_mapping"})
+        self.assertFalse(output.exists())
+
+    def test_mixed_empty_and_nonempty_inputs_remain_partial(self):
+        source = self.write([row()])
+        empty = self.write([], "empty.jsonl")
+        output = self.root / "catalog.json"
+        result = self.cli("--metadata", source, "--metadata", empty, "--output", output)
+        self.assertEqual(result.returncode, 3)
+        summary = json.loads(result.stdout)
+        self.assertEqual(summary["coverage"], "partial")
+        self.assertEqual(summary["rows"], 1)
+        self.assertEqual(summary["input_files"], 2)
+        self.assertEqual(summary["accounting"], {"assigned": 1, "unassigned": 0, "sidecar": 0, "diagnostic": 0})
+        self.assertEqual(json.loads(output.read_text())["summary"], summary)
+
     def test_input_links_and_directories_refused(self):
         source = self.write([row()])
         link = self.root / "linked"

@@ -378,7 +378,7 @@ def _finish(inputs, rows, groups, aliases, shared_roots):
     summary = {**_counts(rows), "input_files": len(inputs), "project_candidates": len(candidates),
                "accounting": accounting, "diagnostics": diagnostics,
                "alias_diagnostics": mapping_diagnostics,
-               "coverage": "partial" if diagnostics or any(mapping_diagnostics.values()) or not rows else "no_known_gaps"}
+               "coverage": "partial" if diagnostics or any(mapping_diagnostics.values()) or any(not item["rows"] for item in inputs) else "no_known_gaps"}
     return {"schema_version": SCHEMA_VERSION, "record_kind": "project_catalog", "summary": summary,
             "semantics": {"counts": "Observed metadata identities and references, never accomplishments or verified projects.",
                           "hermes_identity": "Provider plus typed native ID across database paths; equality does not establish equal content or a unique real-world session.",
@@ -404,6 +404,8 @@ def _read_aliases(path):
         except (ValueError, UnicodeError, RecursionError):
             raise NormalizationError("invalid_alias_mapping") from None
         scope.verify(path, initial)
+    if not isinstance(value, dict):
+        raise NormalizationError("invalid_alias_mapping")
     aliases = Aliases(value)
     aliases.source = {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
     return aliases

@@ -42,7 +42,15 @@ commands, file reads, network, account actions, delegation or side effects. Retu
 matching the supplied schema and exact packet_id/run_id. This is analysis, not task execution.
 Explain the project, requested work, attempts and failed paths, boundaries between work
 episodes, supported results, problem areas, contradictions, missing evidence and uncertainty.
-Every claim including titles and profile areas needs exact packet citation IDs. Observations
+Every claim including titles and profile areas needs exact packet citation IDs.
+Copy citation IDs exactly, including their event: or observation: prefix, and never repeat
+an ID within one citations list. A recorded_request, assistant_claim, recorded_tool_result
+or operator_observation claim must cite only evidence of that same type. Profile checks
+may use only recorded_tool_result, operator_observation or gap, never assistant_claim.
+Put uncorroborated assistant-reported checks elsewhere and explain the missing check as gap.
+Any claim text containing verified, shipped, deployed, revenue, authorized, expert,
+expertise or percentile must have basis gap, even when that word is negated or quoted.
+Observations
 are separately supplied operator attestations, never checks executed by this app. Their
 predicate, target and revision are the entire scope of the observation. Do not generalize.
 Assistant completion prose is an assistant_claim. Recorded tool output is only a historical

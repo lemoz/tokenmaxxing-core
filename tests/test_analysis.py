@@ -67,6 +67,9 @@ class AnalysisTests(unittest.TestCase):
     def test_reusable_alpha_beta_profile_and_exact_repeat_no_call(self):
         first = self.preview()
         self.assertEqual(first["external_prompt"], prompt(first["packet"]))
+        self.assertIn("never repeat\nan ID within one citations list", first["external_prompt"])
+        self.assertIn("may use only recorded_tool_result, operator_observation or gap", first["external_prompt"])
+        self.assertIn("even when that word is negated or quoted", first["external_prompt"])
         self.assertNotIn(str(self.root), first["external_prompt"])
         self.assertNotIn('source_record', first["packet"])
         run = self.finish(first)

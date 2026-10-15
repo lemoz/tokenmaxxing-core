@@ -19,6 +19,11 @@ def main(argv=None):
     importer.add_argument("--selected-session")
     inspector = commands.add_parser("inspect")
     inspector.add_argument("--source", required=True)
+    cataloger = commands.add_parser("catalog")
+    cataloger.add_argument("--metadata", action="append", required=True)
+    cataloger.add_argument("--shared-root", action="append", default=[])
+    cataloger.add_argument("--aliases")
+    cataloger.add_argument("--output", required=True)
     server = commands.add_parser("serve")
     server.add_argument("--store", required=True)
     server.add_argument("--allow-source", action="append", default=[])
@@ -33,6 +38,9 @@ def main(argv=None):
             return 0
         elif args.command == "normalize":
             result = normalize(args.source, args.output, args.format, selected_session=args.selected_session)
+        elif args.command == "catalog":
+            from .discovery import catalog
+            result = catalog(args.metadata, args.output, shared_roots=args.shared_root, aliases=args.aliases)
         else:
             result = inspect(args.source)
     except NormalizationError as error:

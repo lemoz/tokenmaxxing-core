@@ -6,6 +6,8 @@ The core supports Codex JSONL, older Codex `session`/`items` JSON, Claude Code J
 
 A private local pilot adds persistent imports, project grouping, searchable history, an evidence-linked work ledger and scoped artifact checks. First start is empty. It does not infer accomplishments or expertise, score users, or rank token usage. Rankings and public launch are outside this pilot.
 
+The explicit [`catalog` command](docs/project-discovery.md) maps metadata JSONL batches into conservative project candidates with identity coverage, provenance and operator aliases.
+
 ## Private evidence workbench
 
 ```sh

@@ -162,6 +162,41 @@ class AnalysisTests(unittest.TestCase):
                              [(live_id, self.selection[1]["event_id"])])
             self.assertEqual(db.execute("SELECT COUNT(*) FROM work_assessments").fetchone()[0], 0)
 
+    def test_returned_existing_update_support_rejects_new_first(self):
+        self.check_returned_existing_update_support(True)
+
+    def test_returned_existing_update_support_rejects_existing_first(self):
+        self.check_returned_existing_update_support(False)
+
+    def check_returned_existing_update_support(self, new_first):
+        self.assertEqual(self.finish(self.preview(selection=self.selection[:1]))["status"], "succeeded")
+        preview = self.preview(selection=self.selection[:2])
+        existing_id = preview["packet"]["known_episodes"][0]["episode_id"]
+        new_id = next(eid for eid in preview["packet"]["allowed_episode_ids"] if eid != existing_id)
+        def overlapping_updates(value):
+            existing = value["episodes"][0]
+            existing["episode_id"] = existing_id
+            existing["work"].append({"text": "Synthetic added evidence", "basis": "interpretation",
+                "citations": [self.selection[1]["event_id"]], "contradictions": []})
+            new = deepcopy(existing)
+            new["episode_id"] = new_id
+            for claim in (new["title"], *new["work"], *new["limits"]):
+                claim.update(basis="interpretation", citations=[self.selection[1]["event_id"]], contradictions=[])
+            value["episodes"] = [new, existing] if new_first else [existing, new]
+            validate(value, preview["packet"])
+            return value
+        with self.store.transaction() as db:
+            before = {table: [tuple(row) for row in db.execute("SELECT * FROM " + table)]
+                      for table in ("work_episodes", "episode_evidence", "work_assessments")}
+        self.store.analysis.provider = SyntheticProvider(overlapping_updates)
+        failed = self.finish(preview)
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["error"], "analysis_related_evidence_requires_existing_episode")
+        self.assertIsNone(failed["result"])
+        with self.store.transaction() as db:
+            for table, rows in before.items():
+                self.assertEqual([tuple(row) for row in db.execute("SELECT * FROM " + table)], rows)
+
     def test_live_episode_cap_rejects_partial_persistence(self):
         preview = self.preview(selection=self.selection[:2])
         live_ids = [identity(["synthetic live cap", i]) for i in range(LIMITS["episodes"] - 1)]

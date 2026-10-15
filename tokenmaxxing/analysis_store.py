@@ -241,7 +241,8 @@ class AnalysisLedger:
                 target = packet["update_episode_id"]
                 if target:
                     self._episode(db, target, project)
-                for episode in result["episodes"]:
+                existing_ids = {r[0] for r in db.execute("SELECT id FROM work_episodes WHERE project=?", (project,))}
+                for episode in sorted(result["episodes"], key=lambda e: e["episode_id"] not in existing_ids):
                     eid = episode["episode_id"]
                     exists = db.execute("SELECT 1 FROM work_episodes WHERE id=?", (eid,)).fetchone()
                     if exists:

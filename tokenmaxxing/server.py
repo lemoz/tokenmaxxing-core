@@ -19,7 +19,7 @@ CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'se
 ASSETS = {"/": ("index.html", "text/html; charset=utf-8"),
           "/app.js": ("app.js", "text/javascript; charset=utf-8"),
           "/style.css": ("style.css", "text/css; charset=utf-8")}
-for module in ("dom", "import", "history", "profile", "outcomes"):
+for module in ("dom", "import", "history", "profile", "outcomes", "analysis"):
     ASSETS["/" + module + ".js"] = (module + ".js", "text/javascript; charset=utf-8")
 
 
@@ -125,13 +125,24 @@ class PilotServer(HTTPServer):
         pass  # Never dump request data or tracebacks into launcher logs.
 
 
-def serve(root, allow_source=(), allow_artifact=(), port=8765, open_browser=False):
+def serve(root, allow_source=(), allow_artifact=(), port=8765, open_browser=False,
+          analysis_projects=(), analysis_directory=None, analysis_runner=(), analysis_timeout=300):
     store = Store(root, allow_source, allow_artifact)
     server = None
     try:
+        if analysis_projects:
+            if not analysis_directory:
+                raise NormalizationError("analysis_private_provider_directory_required")
+            from .analysis_provider import CodexProvider
+            from .private_paths import absolute
+            directory = absolute(analysis_directory)
+            if directory == store.root or store.root in directory.parents or directory in store.root.parents:
+                raise NormalizationError("analysis_provider_directory_must_be_separate")
+            provider = CodexProvider(directory, runner_prefix=analysis_runner, timeout=analysis_timeout)
+            store.analysis.configure(analysis_projects, provider, allow_source)
         server = PilotServer(store, port)
         url = server.origin + "/#token=" + server.token
-        print(encode({"origin": server.origin, "status": "ready", "store_version": 1}), flush=True)
+        print(encode({"origin": server.origin, "status": "ready", "store_version": 2}), flush=True)
         if open_browser:
             if not webbrowser.open(url):
                 print("Browser did not open. Restart in an interactive terminal to see the private launch URL.", file=sys.stderr)

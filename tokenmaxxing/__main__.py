@@ -30,11 +30,18 @@ def main(argv=None):
     server.add_argument("--allow-artifact", action="append", default=[])
     server.add_argument("--port", type=int, default=8765)
     server.add_argument("--open-browser", action="store_true")
+    server.add_argument("--analysis-project", action="append", default=[], help="Approved personal project label; inference disabled when absent")
+    server.add_argument("--analysis-directory", help="Separate private 0700 provider temporary root")
+    server.add_argument("--analysis-runner-prefix", default="[]", help="Trusted startup JSON argv prefix; optional {prompt_path} and {cwd}")
+    server.add_argument("--analysis-timeout", type=int, default=300, help="Provider outer timeout seconds, including wrapper cleanup allowance")
     args = parser.parse_args(argv)
     try:
         if args.command == "serve":
             from .server import serve
-            serve(args.store, args.allow_source, args.allow_artifact, args.port, args.open_browser)
+            from .records import loads
+            runner = loads(args.analysis_runner_prefix)
+            serve(args.store, args.allow_source, args.allow_artifact, args.port, args.open_browser,
+                  args.analysis_project, args.analysis_directory, runner, args.analysis_timeout)
             return 0
         elif args.command == "normalize":
             result = normalize(args.source, args.output, args.format, selected_session=args.selected_session)

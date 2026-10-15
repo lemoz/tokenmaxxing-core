@@ -4,7 +4,7 @@ This is source for a private local evidence workbench. Its implementation is not
 
 ## Startup
 
-Run from the source checkout with Python 3.9+ and its standard library on macOS/Linux. The pilot uses POSIX permissions, `O_NOFOLLOW`, directory descriptors and `flock`. No pip/npm install, external assets, model call or provider API is used.
+Run from the source checkout with Python 3.9+ and its standard library on macOS/Linux. The pilot uses POSIX permissions, `O_NOFOLLOW`, directory descriptors and `flock`. Import/history/outcome browsing uses no pip/npm install, external assets, model call or provider API. The optional [reviewed analysis flow](project-analysis.md) sends an explicitly previewed packet through the configured existing-account Codex CLI only after Analyze. It is disabled by default.
 
 ```sh
 python3 -m tokenmaxxing serve --store /absolute/private/pilot \
@@ -35,7 +35,7 @@ A duplicate import with a different project label preserves the existing groupin
 
 History pages disclose their total and permit navigation across all matching stored records. Current evidence is the default; selecting a session exposes every retained revision. Source links from outcomes reopen the exact revision even after it becomes historical. Search covers canonical messages, tool interactions, locators and raw retained fields, including unsupported records.
 
-The profile is a ledger with source links, not a model-generated summary. It separates recorded user-role text, observed messages/tools, retained metadata/unsupported evidence, and outcome receipts. A user-role tool-result-only message is not intent. Explicit inactive, compacted, summary and Claude `isMeta` evidence is not new user intent. Role labels cannot establish who authored a message or ownership of participants. Counters describe records and receipts, never accomplishments, expertise, rankings or token scores.
+The profile retains its source ledger and now adds optional substantive model interpretations, work episodes and assessment history above it. It separates recorded user-role text, observed messages/tools, retained metadata/unsupported evidence, model interpretations, operator observations and byte receipts. A user-role tool-result-only message is not intent. Explicit inactive, compacted, summary and Claude `isMeta` evidence is not new user intent. Framework messages and historical guardian instructions do not establish human intent, accomplishments or current authorization. Role labels cannot establish who authored a message or ownership of participants. Counters describe persisted records, work episodes and receipts, never expertise, rankings or token scores. See the [version-2 migration and analysis contract](project-analysis.md).
 
 ## Hermes snapshot contract
 

@@ -30,6 +30,18 @@ def page(query):
 
 
 def get(store, route, query):
+    if route == "/api/analysis/projects":
+        fields(query)
+        return store.analysis.projects_history()
+    if route == "/api/analysis":
+        fields(query, ("project",))
+        return store.analysis.overview(text(query, "project"))
+    if route == "/api/analysis/candidates":
+        fields(query, ("project",), ("offset", "limit"))
+        return store.analysis.candidates(text(query, "project"), **page(query))
+    if route == "/api/analysis/run":
+        fields(query, ("run_id",))
+        return store.analysis.run(text(query, "run_id"))
     if route == "/api/overview":
         fields(query)
         return store.overview()
@@ -56,6 +68,19 @@ def get(store, route, query):
 
 
 def post(store, route, data):
+    if route == "/api/analysis/preview":
+        fields(data, ("project", "selections"), ("update_episode_id", "observation_ids"))
+        return store.analysis.preview(text(data, "project"), data["selections"],
+                                      text(data, "update_episode_id"), data.get("observation_ids"))
+    if route == "/api/analysis/start":
+        fields(data, ("packet_id",))
+        return store.analysis.start(text(data, "packet_id"))
+    if route == "/api/analysis/cancel":
+        fields(data, ("run_id",))
+        return store.analysis.cancel(text(data, "run_id"))
+    if route == "/api/analysis/observation":
+        fields(data, ("project", "episode_id", "observation"))
+        return store.analysis.observe(text(data, "project"), text(data, "episode_id"), data["observation"])
     if route == "/api/import":
         fields(data, ("path", "format", "project"), ("selected_session",))
         return store.import_source(text(data, "path"), text(data, "format"), text(data, "project"),

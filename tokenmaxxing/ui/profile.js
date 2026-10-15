@@ -1,16 +1,21 @@
 import {el, button, paragraph, badge, panel, empty, field, input, details, form, submit, preview} from './dom.js';
+import {workLedger} from './analysis.js';
 
 export async function renderProfile(c) {
   const projects = c.overview.projects.filter(p => !c.s.project || p.project === c.s.project);
   if (!projects.length) return empty('No project evidence yet. Import a selected source with a project label to start the ledger.');
   const cards = [];
   for (const project of projects) {
+    const analysis = await c.api('/api/analysis', undefined, {project: project.project});
+    cards.push(panel(project.project + ' · substantive work profile',
+      analysis.episodes.length ? workLedger(c, analysis, true) : empty('No interpretation yet. Explicitly select and review evidence in Analysis.'),
+      button('Open Analysis', () => c.run(() => c.navigate('analysis', {project: project.project})))));
     const sections = [];
-    for (const [kind, title] of [['intent', 'Recorded requests / intent'], ['observed', 'Observed messages / tools'], ['retained', 'Retained metadata / unsupported']]) {
+    for (const [kind, title] of [['intent', 'Recorded user-role text'], ['observed', 'Observed messages / tools'], ['retained', 'Retained metadata / unsupported']]) {
       const page = await c.api('/api/evidence', undefined, {project: project.project, category_filter: kind, limit: 3});
       sections.push(el('section', {class: 'ledger-section'}, el('h3', {}, title),
         paragraph(`${project[kind]} current records · showing ${page.items.length}`),
-        kind === 'intent' ? paragraph('User-role text is recorded intent, not proof of who authored it. Tool-result-only messages are excluded.') : null,
+        kind === 'intent' ? paragraph('User-role text can include framework instructions. The role does not establish human intent or authorship. Analysis excludes recognized wrappers.') : null,
         page.items.length ? page.items.map(row => el('div', {class: 'ledger-item'}, paragraph(preview(row), 'small'),
           button('Inspect exact evidence', () => c.open(row.id), {'data-event-id': row.id}))) : paragraph('No evidence in this category.'),
         button('Browse all ' + kind + ' records', () => c.run(() => c.navigate('history', {project: project.project, session: '', revision: '', query: '', provider: '', category: kind})))));

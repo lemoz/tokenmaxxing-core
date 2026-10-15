@@ -5,7 +5,11 @@ const words = value => value.replaceAll('_', ' ');
 const characters = value => Array.from(value).length;
 function draft(c) {
   c.s.analysisDrafts ||= {};
-  return c.s.analysisDrafts[c.s.project] ||= {selected: {}, target: '', observations: [], offset: 0, preview: null, busy: false};
+  return c.s.analysisDrafts[c.s.project] ||= {selected: {}, target: '', observations: [], offset: 0, preview: null, revision: 0, busy: false};
+}
+function invalidate(d) {
+  d.revision = (d.revision || 0) + 1;
+  d.preview = null;
 }
 function claim(c, value, observations) {
   return el('div', {class: 'ledger-item'}, badge('Model ' + words(value.basis)), paragraph(value.text, ''),
@@ -51,7 +55,8 @@ export function workLedger(c, ledger, profile = false) {
           const project = episode.project;
           c.s.analysisDrafts ||= {};
           c.s.analysisDrafts[project] ||= {selected: {}, observations: [], offset: 0, busy: false};
-          Object.assign(c.s.analysisDrafts[project], {target: episode.id, preview: null});
+          c.s.analysisDrafts[project].target = episode.id;
+          invalidate(c.s.analysisDrafts[project]);
           await c.navigate('analysis', {project});
         })));
     }));
@@ -65,7 +70,7 @@ function observationForm(c, episode, d) {
       const observation = Object.fromEntries(Object.entries(values).filter(([key]) => key !== 'linked'));
       observation.provenance = 'operator_attestation'; observation.evidence = evidence;
       const response = await c.api('/api/analysis/observation', {project: c.s.project, episode_id: episode.id, observation});
-      d.observations = [...new Set([...d.observations, response.id])]; d.preview = null;
+      d.observations = [...new Set([...d.observations, response.id])]; invalidate(d);
       await c.refresh(); c.notice('Operator attestation saved. Select evidence and preview a refresh to incorporate it into this same episode.');
     }),
     field('Observation type', select('kind', [['functional_check', 'Bounded functional check'], ['browser_observation', 'Browser observation']], 'functional_check')),
@@ -106,13 +111,12 @@ export async function renderAnalysis(c) {
     d.poll = setTimeout(() => poll(c, project, pending.id, d), 1000);
   }
   const page = await c.api('/api/analysis/candidates', undefined, {project, offset: d.offset});
-  const invalidate = () => { d.preview = null; };
   const selection = panel('Review and explicitly select excerpts',
     paragraph('Only approved personal projects can use inference. Review each excerpt for personal scope. Unknown or mixed-company content must stay unselected. Redaction is limited; preview every byte before Analyze.', 'privacy'),
     field('Work to update', select('episode', [['', 'New work: no existing episode'], ...ledger.episodes.map(e => [e.id, e.assessments[e.assessments.length - 1].body.title.text])], d.target,
-      event => c.run(async () => { d.target = event.target.value; d.observations = []; invalidate(); await c.refresh(); }))),
+      event => c.run(async () => { d.target = event.target.value; d.observations = []; invalidate(d); await c.refresh(); }))),
     paragraph('Choose the existing episode for later evidence about the same work. Wording changes do not create a second accomplishment.'),
-    pager(page, offset => c.run(async () => { d.offset = offset; await c.refresh(); })),
+    pager(page, offset => c.run(async () => { d.offset = offset; invalidate(d); await c.refresh(); })),
     ...page.items.map(row => {
       const saved = d.selected[row.event_id];
       const choices = row.parts.map(p => [p.part, p.part + ' · ' + words(p.evidence_type)]);
@@ -122,7 +126,7 @@ export async function renderAnalysis(c) {
       const to = input('end', {type: 'number', min: '1', value: saved?.end ?? (part ? characters(part.text) : 0), 'aria-label': 'Excerpt end character'});
       const sourceText = el('pre', {}, part?.text || 'No supported text part. Original remains in History.');
       const save = () => {
-        invalidate();
+        invalidate(d);
         if (check.checked && part) d.selected[row.event_id] = {event_id: row.event_id, session_id: row.session_id,
           revision_id: row.revision_id, scope: 'personal_reviewed', part: part.part, start: Number(from.value), end: Number(to.value)};
         else delete d.selected[row.event_id];
@@ -140,14 +144,17 @@ export async function renderAnalysis(c) {
     details('Selections retained across pages', ...Object.values(d.selected).map(item => el('div', {class: 'ledger-item'},
       paragraph(item.event_id + ' · characters ' + item.start + ' to ' + item.end),
       button('Inspect selected source', () => c.open(item.event_id), {'data-event-id': item.event_id}),
-      button('Remove selection', () => c.run(async () => { delete d.selected[item.event_id]; invalidate(); await c.refresh(); }))))),
+      button('Remove selection', () => c.run(async () => { delete d.selected[item.event_id]; invalidate(d); await c.refresh(); }))))),
     ...ledger.episodes.filter(e => e.id === d.target).map(e => el('div', {},
       ...e.observations.map(o => field('Include operator observation: ' + o.body.method + ' · ' + o.body.status,
         input('observation', {type: 'checkbox', checked: d.observations.includes(o.id), onchange: event => {
-          invalidate(); d.observations = event.target.checked ? [...d.observations, o.id] : d.observations.filter(id => id !== o.id);
+          invalidate(d); d.observations = event.target.checked ? [...d.observations, o.id] : d.observations.filter(id => id !== o.id);
         }}))), observationForm(c, e, d))),
     button('Preview exact external analysis packet', () => c.run(async () => {
-      d.preview = await c.api('/api/analysis/preview', {project, selections: Object.values(d.selected), update_episode_id: d.target, observation_ids: d.observations});
+      const revision = d.revision;
+      const preview = await c.api('/api/analysis/preview', {project, selections: Object.values(d.selected), update_episode_id: d.target, observation_ids: d.observations});
+      if (d.revision !== revision) return;
+      d.preview = preview; d.previewRevision = revision;
       await c.refresh(); c.notice('Preview saved locally. Nothing has been sent to the model.');
     }), {class: 'primary', disabled: !ledger.enabled || d.busy}));
   const host = el('div', {class: 'stack'},
@@ -158,8 +165,11 @@ export async function renderAnalysis(c) {
     selection);
   if (d.preview) {
     const p = d.preview;
+    const revision = d.previewRevision;
     const start = button('Analyze this exact reviewed packet', async () => {
-      if (d.preview !== p) { c.notice('Selection changed. Preview the packet again.', true); return; }
+      if (d.revision !== revision || d.previewRevision !== revision || d.preview !== p) {
+        c.notice('Selection changed. Preview the packet again.', true); return;
+      }
       start.disabled = true;
       try {
         const run = await c.api('/api/analysis/start', {packet_id: p.packet_id});

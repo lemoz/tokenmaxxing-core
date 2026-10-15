@@ -60,6 +60,13 @@ class AnalysisHTTPTests(unittest.TestCase):
         # A server-validated model failure persists, without an assessment.
         self.store.analysis.provider = SyntheticProvider(lambda value: {**value, 'extra': 'SECRET'})
         self.store.analysis.provider.descriptor = {**self.provider.descriptor, 'provider': 'invalid-synthetic'}
+        status, _, content = self.request('/api/analysis/start', {'packet_id': preview['packet_id']})
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(content)['error'], 'analysis_packet_stale_preview_again')
+        self.assertEqual(self.store.analysis.provider.calls, 0)
+        episode = self.api('/api/analysis?project=Alpha')['episodes'][0]['id']
+        preview = self.api('/api/analysis/preview', {'project': 'Alpha', 'selections': self.selection,
+            'update_episode_id': episode})
         failed = self.wait_run(self.api('/api/analysis/start', {'packet_id': preview['packet_id']}))
         self.assertEqual(failed['status'], 'failed')
         self.assertNotIn('SECRET', json.dumps(failed))

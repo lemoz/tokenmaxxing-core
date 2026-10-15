@@ -1,4 +1,5 @@
 from copy import deepcopy
+import hashlib
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -43,6 +44,25 @@ class AnalysisTests(unittest.TestCase):
                 return row
             time.sleep(.01)
         self.fail("synthetic worker did not finish")
+
+    def stored_observation(self, episode):
+        # Synthetic persisted-body fixture. This tests reauthorization without
+        # bypassing Scope; actual proof attachment remains in the HTTP tests.
+        proof, target = self.root / "proof.txt", self.root / "artifact.txt"
+        proof.write_text("Synthetic captured observation proof")
+        target.write_text("Synthetic observed artifact")
+        body = {"kind": "functional_check", "method": "Synthetic operator observation",
+            "target_path": str(target), "target_revision": "synthetic-r2",
+            "expected_predicate": "touch " + str(self.root / "must-not-execute"),
+            "actual_result": "Synthetic predicate reported passed", "status": "passed", "observed_at": now(),
+            "limitations": "Synthetic only; no real check performed", "provenance": "operator_attestation",
+            "proof_path": str(proof), "proof": proof.read_text(),
+            "proof_sha256": hashlib.sha256(proof.read_bytes()).hexdigest(),
+            "evidence": [self.selection[0]["event_id"]], "app_executed": False}
+        oid = identity([episode, body])
+        with self.store.transaction(True) as db:
+            db.execute("INSERT INTO work_observations VALUES (?,?,?,?)", (oid, episode, encode(body), now()))
+        return oid, body
 
     def test_reusable_alpha_beta_profile_and_exact_repeat_no_call(self):
         first = self.preview()
@@ -89,6 +109,84 @@ class AnalysisTests(unittest.TestCase):
         seed(self.store, self.root, later=True)
         self.assertRaisesRegex(NormalizationError, "revision", self.preview)
         self.assertRaisesRegex(NormalizationError, "stale", self.store.analysis.start, packet["packet_id"])
+
+    def test_two_previews_before_first_run_reject_stale_episode_context(self):
+        first = self.preview(selection=self.selection[:1])
+        second = self.preview(selection=self.selection[:2])
+        self.assertEqual(first["packet"]["known_episodes"], [])
+        self.assertEqual(second["packet"]["known_episodes"], [])
+        self.assertEqual(self.finish(first)["status"], "succeeded")
+        with self.assertRaisesRegex(NormalizationError, "analysis_packet_stale_preview_again"):
+            self.store.analysis.start(second["packet_id"])
+        self.assertEqual(self.provider.calls, 1)
+        self.assertEqual(self.store.analysis.overview("Alpha")["counts"],
+                         {"episodes": 1, "assessments": 1, "observations": 0})
+        refreshed = self.preview(selection=self.selection[:2])
+        self.assertNotEqual(refreshed["packet_id"], second["packet_id"])
+        self.assertEqual(len(refreshed["packet"]["known_episodes"]), 1)
+        # A current packet can legitimately update that same episode.
+        self.assertEqual(self.finish(refreshed)["status"], "succeeded")
+        self.assertEqual(self.store.analysis.overview("Alpha")["counts"]["episodes"], 1)
+        repeated = self.preview(selection=self.selection[:1])
+        self.assertEqual(repeated["packet_id"], first["packet_id"])
+        self.assertTrue(self.store.analysis.start(repeated["packet_id"])["reused"])
+        self.assertEqual(self.provider.calls, 2)
+
+    def test_live_episode_support_rejects_partial_persistence(self):
+        preview = self.preview()
+        live_id = identity("synthetic live episode")
+        def change_live_context(value):
+            with self.store.transaction(True) as db:
+                db.execute("INSERT INTO work_episodes VALUES (?,?,?)", (live_id, "Alpha", now()))
+                db.execute("INSERT INTO episode_evidence VALUES (?,?)", (live_id, self.selection[1]["event_id"]))
+            # The first result episode is valid. The second links live support
+            # through a contradiction, so all result writes must roll back.
+            value["episodes"][0]["work"] = value["episodes"][0]["work"][:1]
+            value["episodes"][0]["state"] = "attempted"
+            other = deepcopy(value["episodes"][0])
+            other["episode_id"] = preview["packet"]["allowed_episode_ids"][1]
+            for claim in (other["title"], *other["work"], *other["limits"]):
+                claim.update(basis="gap", citations=[self.selection[2]["event_id"]],
+                             contradictions=[self.selection[1]["event_id"]])
+            value["episodes"].append(other)
+            validate(value, preview["packet"])
+            return value
+        self.store.analysis.provider = SyntheticProvider(change_live_context)
+        failed = self.finish(preview)
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["error"], "analysis_related_evidence_requires_existing_episode")
+        self.assertIsNone(failed["result"])
+        with self.store.transaction() as db:
+            self.assertEqual([tuple(r) for r in db.execute("SELECT id FROM work_episodes")], [(live_id,)])
+            self.assertEqual([tuple(r) for r in db.execute("SELECT * FROM episode_evidence")],
+                             [(live_id, self.selection[1]["event_id"])])
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM work_assessments").fetchone()[0], 0)
+
+    def test_live_episode_cap_rejects_partial_persistence(self):
+        preview = self.preview(selection=self.selection[:2])
+        live_ids = [identity(["synthetic live cap", i]) for i in range(LIMITS["episodes"] - 1)]
+        def fill_live_context(value):
+            with self.store.transaction(True) as db:
+                for eid in live_ids:
+                    db.execute("INSERT INTO work_episodes VALUES (?,?,?)", (eid, "Alpha", now()))
+                    db.execute("INSERT INTO episode_evidence VALUES (?,?)", (eid, self.selection[2]["event_id"]))
+            # Two disjoint proposed episodes would take the live count to 13.
+            other = deepcopy(value["episodes"][0])
+            other["episode_id"] = preview["packet"]["allowed_episode_ids"][1]
+            for claim in (other["title"], *other["work"], *other["limits"]):
+                claim.update(basis="gap", citations=[self.selection[1]["event_id"]])
+            value["episodes"].append(other)
+            validate(value, preview["packet"])
+            return value
+        self.store.analysis.provider = SyntheticProvider(fill_live_context)
+        failed = self.finish(preview)
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["error"], "analysis_project_episode_limit_12")
+        self.assertIsNone(failed["result"])
+        with self.store.transaction() as db:
+            self.assertEqual({r[0] for r in db.execute("SELECT id FROM work_episodes")}, set(live_ids))
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM episode_evidence").fetchone()[0], len(live_ids))
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM work_assessments").fetchone()[0], 0)
 
     def test_exclusions_excerpt_provenance_and_distinct_equal_text(self):
         with self.store.transaction(True) as db:
@@ -219,7 +317,11 @@ class AnalysisTests(unittest.TestCase):
             "actual_result": "one stored note returned", "status": "passed", "observed_at": now(),
             "limitations": "Only the lookup predicate; no publishing or full feature check",
             "provenance": "operator_attestation", "proof": "Synthetic observation fixture only",
+            "proof_path": str(self.root / "proof.txt"), "target_path": str(self.root / "artifact.txt"),
             "proof_sha256": "a" * 64, "evidence": [self.selection[0]["event_id"]], "app_executed": False}
+        Path(observation["proof_path"]).write_text(observation["proof"])
+        Path(observation["target_path"]).write_text("Synthetic observed artifact")
+        observation["proof_sha256"] = hashlib.sha256(observation["proof"].encode()).hexdigest()
         oid = identity(observation)
         with self.store.transaction(True) as db:
             db.execute("INSERT INTO work_observations VALUES (?,?,?,?)", (oid, episode, encode(observation), now()))
@@ -236,6 +338,68 @@ class AnalysisTests(unittest.TestCase):
         self.store.analysis.configure(["Alpha", "Beta"], self.provider, [self.root])
         self.assertEqual(self.store.analysis.overview("Alpha"), before)
         self.assertEqual(self.provider.calls, 2)
+
+    def assert_revoked_observation(self, revoked):
+        first = self.finish(self.preview(selection=self.selection[:1]))
+        episode = first["result"]["episodes"][0]["episode_id"]
+        oid, body = self.stored_observation(episode)
+        prepared = self.preview(selection=self.selection[:1], target=episode, observations=[oid])
+        source = self.root / "Alpha.jsonl"
+        for successful in (False, True):
+            self.store.close()
+            sources = [source] if revoked == "proof" else [source, body["proof_path"]]
+            artifacts = [] if revoked == "artifact" else [body["target_path"]]
+            self.store = Store(self.root / "store", sources, artifacts)
+            self.provider = SyntheticProvider()
+            self.store.analysis.configure(["Alpha"], self.provider, [source])
+            actions = {
+                "cached_preview": lambda: self.preview(selection=self.selection[:1], target=episode, observations=[oid]),
+                "new_preview": lambda: self.preview(selection=self.selection[:2], target=episode, observations=[oid]),
+                "persisted_start": lambda: self.finish(prepared),
+            }
+            for operation, action in actions.items():
+                with self.subTest(successful=successful, operation=operation):
+                    with self.assertRaisesRegex(NormalizationError, "analysis_observation_requires_startup_grant"):
+                        action()
+            with self.subTest(successful=successful, operation="no_calls_or_partial_rows"):
+                self.assertEqual(self.provider.calls, 0)
+                self.assertEqual(self.store.analysis.overview("Alpha")["counts"],
+                                 {"episodes": 1, "assessments": 2 if successful else 1, "observations": 1})
+            self.store.close()
+            self.store = Store(self.root / "store", [source, body["proof_path"]], [body["target_path"]])
+            self.store.analysis.configure(["Alpha"], self.provider, [source])
+            if not successful:
+                self.assertEqual(self.finish(prepared)["status"], "succeeded")
+
+    def test_observation_proof_grant_revoked_after_restart(self):
+        self.assert_revoked_observation("proof")
+
+    def test_observation_artifact_grant_revoked_after_restart(self):
+        self.assert_revoked_observation("artifact")
+
+    def test_observation_grants_preserve_captured_proof_and_repeat(self):
+        first = self.finish(self.preview(selection=self.selection[:1]))
+        episode = first["result"]["episodes"][0]["episode_id"]
+        oid, body = self.stored_observation(episode)
+        prepared = self.preview(selection=self.selection[:1], target=episode, observations=[oid])
+        # A replacement file does not replace the captured historical proof.
+        Path(body["proof_path"]).write_text("Different synthetic proof bytes")
+        self.store.close()
+        self.store = Store(self.root / "store", [self.root / "Alpha.jsonl", body["proof_path"]], [body["target_path"]])
+        self.store.analysis.configure(["Alpha"], self.provider, [self.root / "Alpha.jsonl"])
+        reused = self.preview(selection=self.selection[:1], target=episode, observations=[oid])
+        self.assertEqual(reused, prepared)
+        fresh = self.preview(selection=self.selection[:2], target=episode, observations=[oid])
+        self.assertEqual(fresh["packet"]["observations"], prepared["packet"]["observations"])
+        self.assertEqual(fresh["packet"]["observations"][0]["proof"], body["proof"])
+        self.assertEqual(self.finish(prepared)["status"], "succeeded")
+        self.assertTrue(self.store.analysis.start(self.preview(selection=self.selection[:1],
+            target=episode, observations=[oid])["packet_id"])["reused"])
+        self.assertEqual(self.provider.calls, 2)
+        stored = self.store.analysis.overview("Alpha")["episodes"][0]["observations"][0]["body"]
+        self.assertEqual(stored, body)
+        self.assertFalse(stored["app_executed"])
+        self.assertFalse((self.root / "must-not-execute").exists())
 
     def test_failure_atomicity_move_pending_and_cancel(self):
         ready, release = threading.Event(), threading.Event()
@@ -335,6 +499,32 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(ledger["counts"]["episodes"], 1)
         self.assertTrue(ledger["episodes"][0]["assessments"][0]["stale"])
         self.assertIn("Alpha", self.store.analysis.projects_history()["projects"])
+
+    def test_moved_episode_context_excluded_from_retained_project_preview(self):
+        retained = seed(self.store, self.root, "Beta")
+        self.store.move(retained[0]["session_id"], "Alpha")
+        first = self.finish(self.preview(selection=self.selection[:1]))
+        self.assertEqual(first["status"], "succeeded")
+        episode = first["result"]["episodes"][0]
+        before_move = self.preview(selection=retained[:1])
+        self.assertEqual(before_move["packet"]["known_episodes"][0]["episode_id"], episode["episode_id"])
+        self.store.move(self.selection[0]["session_id"], "Beta")
+        after_move = self.preview(selection=retained[:1])
+        self.assertEqual(after_move["packet"]["known_episodes"], [])
+        self.assertNotIn(episode["episode_id"], after_move["packet"]["allowed_episode_ids"])
+        self.assertNotIn(episode["title"]["text"], after_move["external_prompt"])
+        for selected in self.selection:
+            self.assertNotIn(selected["event_id"], after_move["external_prompt"])
+        self.assertEqual(self.preview(selection=retained[:1])["packet_id"], after_move["packet_id"])
+        with self.assertRaisesRegex(NormalizationError, "ownership"):
+            self.preview(selection=retained[:1], target=episode["episode_id"])
+        with self.assertRaisesRegex(NormalizationError, "stale"):
+            self.store.analysis.start(before_move["packet_id"])
+        historical = self.store.analysis.overview("Alpha")["episodes"][0]
+        self.assertEqual(historical["assessments"][0]["body"], episode)
+        self.assertTrue(historical["assessments"][0]["stale"])
+        self.assertEqual(historical["evidence_ids"], [self.selection[0]["event_id"]])
+        self.assertEqual(self.provider.calls, 1)
 
 
 class MigrationTests(unittest.TestCase):

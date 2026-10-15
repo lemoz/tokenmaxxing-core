@@ -83,6 +83,43 @@ class AnalysisLedger:
                 "revision_id": r["revision_id"], "provider": r["provider"], "parts": parts(r["body"]),
                 "kind": r["body"]["kind"], "diagnostics": r["body"]["diagnostics"]} for r in page["items"]]}
 
+    def _known_episodes(self, db, project):
+        known = []
+        for row in db.execute("SELECT id FROM work_episodes WHERE project=? ORDER BY id", (project,)):
+            try:
+                self._episode(db, row[0], project)
+            except NormalizationError as error:
+                if str(error) != "analysis_evidence_ownership_or_revision_changed":
+                    raise
+                # Retain local history, but never export moved/deleted support.
+                continue
+            prior = db.execute("SELECT body FROM work_assessments WHERE episode_id=? ORDER BY version DESC LIMIT 1", (row[0],)).fetchone()
+            known.append({"episode_id": row[0], "evidence_ids": [e[0] for e in db.execute(
+                "SELECT event_id FROM episode_evidence WHERE episode_id=? ORDER BY event_id", (row[0],))],
+                "prior_interpretation_title": loads(prior[0])["title"]["text"] if prior else "Unassessed work"})
+        return known
+
+    def _successful_run(self, db, packet_id):
+        return db.execute("SELECT * FROM analysis_runs WHERE packet_id=? AND provider=? AND status='succeeded' ORDER BY created_at LIMIT 1",
+                          (packet_id, encode(self.provider.descriptor))).fetchone()
+
+    def _observation(self, db, observation_id, episode_id, project):
+        identifier(observation_id)
+        row = db.execute("SELECT body FROM work_observations WHERE id=? AND episode_id=?", (observation_id, episode_id)).fetchone()
+        if not row:
+            raise NormalizationError("analysis_observation_ownership_mismatch")
+        body = loads(row["body"])
+        for event in body["evidence"]:
+            event_row(db, event, project, current=False)
+        try:
+            # Reauthorize original local paths, never the exported placeholder.
+            # This checks authority only; captured proof bytes stay immutable.
+            self.store.sources.selected(body["proof_path"])
+            self.store.artifacts.selected(body["target_path"])
+        except (KeyError, NormalizationError, OSError):
+            raise NormalizationError("analysis_observation_requires_startup_grant") from None
+        return body
+
     def preview(self, project, selections, update_episode_id="", observation_ids=None):
         project = self._authorized(project)
         observation_ids = [] if observation_ids is None else observation_ids
@@ -96,13 +133,7 @@ class AnalysisLedger:
                 self._episode(db, update_episode_id, project)
             observations = []
             for oid in sorted(observation_ids):
-                identifier(oid)
-                row = db.execute("SELECT * FROM work_observations WHERE id=? AND episode_id=?", (oid, update_episode_id)).fetchone()
-                if not row:
-                    raise NormalizationError("analysis_observation_ownership_mismatch")
-                body = loads(row["body"])
-                for event in body["evidence"]:
-                    event_row(db, event, project, current=False)
+                body = self._observation(db, oid, update_episode_id, project)
                 exported = {key: body[key] for key in ("kind", "method", "target_revision", "expected_predicate",
                     "actual_result", "status", "observed_at", "limitations", "provenance", "proof", "proof_sha256")}
                 exported["target"] = "explicitly_granted_local_artifact"
@@ -111,12 +142,7 @@ class AnalysisLedger:
                     raise NormalizationError("analysis_suspicious_observation_narrow_selection")
                 observations.append({**exported, "citation_id": "observation:" + oid,
                                      "evidence_type": "operator_observation", "episode_id": update_episode_id})
-            known = [{"episode_id": r[0], "evidence_ids": [e[0] for e in db.execute(
-                "SELECT event_id FROM episode_evidence WHERE episode_id=? ORDER BY event_id", (r[0],))]}
-                for r in db.execute("SELECT id FROM work_episodes WHERE project=? ORDER BY id", (project,))]
-            for episode in known:
-                prior = db.execute("SELECT body FROM work_assessments WHERE episode_id=? ORDER BY version DESC LIMIT 1", (episode["episode_id"],)).fetchone()
-                episode["prior_interpretation_title"] = loads(prior[0])["title"]["text"] if prior else "Unassessed work"
+            known = self._known_episodes(db, project)
             if len(known) > LIMITS["episodes"]:
                 raise NormalizationError("analysis_project_episode_limit_12")
             # Exact repeats use the originally previewed packet, even after that
@@ -126,7 +152,10 @@ class AnalysisLedger:
             observation_state = [list(r) for r in db.execute("SELECT o.id FROM work_observations o JOIN work_episodes e ON e.id=o.episode_id WHERE e.project=? ORDER BY o.id", (project,))]
             for prior in previous:
                 snapshot = loads(prior["snapshot"])
-                if snapshot == {"scope": current_scope, "observations": observation_state}:
+                prior_known = loads(prior["body"])["known_episodes"]
+                if (snapshot == {"scope": current_scope, "observations": observation_state}
+                        and {e["episode_id"] for e in prior_known} <= {e["episode_id"] for e in known}
+                        and (prior_known == known or self._successful_run(db, prior["id"]))):
                     # Revalidate startup grants and selection ownership as well.
                     build(self.store, db, project, selections, update_episode_id, observations, known, self.source_grants)
                     return self._preview_response(prior)
@@ -169,6 +198,13 @@ class AnalysisLedger:
                 if not packet["evidence"]:
                     raise NormalizationError("analysis_no_supported_evidence")
                 request = loads(row["request"])
+                if packet["update_episode_id"]:
+                    self._episode(db, packet["update_episode_id"], row["project"])
+                for episode in packet["known_episodes"]:
+                    self._episode(db, episode["episode_id"], row["project"])
+                for observation in packet["observations"]:
+                    self._observation(db, observation["citation_id"].removeprefix("observation:"),
+                                      packet["update_episode_id"], row["project"])
                 # A preview can outlive a restart. Current startup grants must
                 # still authorize every selected immutable source before send.
                 build(self.store, db, row["project"], request["selections"], packet["update_episode_id"],
@@ -176,9 +212,11 @@ class AnalysisLedger:
                 for item in packet["evidence"]:
                     event_row(db, item["event_id"], row["project"], item["session_id"], item["revision_id"])
                 provider = encode(self.provider.descriptor)
-                prior = db.execute("SELECT * FROM analysis_runs WHERE packet_id=? AND provider=? AND status='succeeded' ORDER BY created_at LIMIT 1", (packet_id, provider)).fetchone()
+                prior = self._successful_run(db, packet_id)
                 if prior:
                     return {"run_id": prior["id"], "status": "succeeded", "reused": True}
+                if packet["known_episodes"] != self._known_episodes(db, row["project"]):
+                    raise NormalizationError("analysis_packet_stale_preview_again")
                 if self.active:
                     if self.active[3] == packet_id:
                         return {"run_id": self.active[0], "status": "pending", "reused": True}
@@ -205,9 +243,9 @@ class AnalysisLedger:
                     self._episode(db, target, project)
                 for episode in result["episodes"]:
                     eid = episode["episode_id"]
-                    if db.execute("SELECT 1 FROM work_episodes WHERE id=?", (eid,)).fetchone():
+                    exists = db.execute("SELECT 1 FROM work_episodes WHERE id=?", (eid,)).fetchone()
+                    if exists:
                         self._episode(db, eid, project)
-                    db.execute("INSERT OR IGNORE INTO work_episodes VALUES (?,?,?)", (eid, project, now()))
                     # Keep submitted evidence as episode context, not a count of
                     # achievements. Each episode's claims still cite exact support.
                     from .analysis_contract import claims
@@ -216,6 +254,17 @@ class AnalysisLedger:
                         linked = {i["event_id"] for i in packet["evidence"]} if target else set()
                     if not linked:
                         raise NormalizationError("analysis_episode_requires_source_evidence")
+                    if not exists:
+                        # Packets and provider replies can predate live work.
+                        # Check both invariants in this same write transaction;
+                        # any failure rolls back all episodes and assessments.
+                        count = db.execute("SELECT COUNT(*) FROM work_episodes WHERE project=?", (project,)).fetchone()[0]
+                        if count >= LIMITS["episodes"]:
+                            raise NormalizationError("analysis_project_episode_limit_12")
+                        if any(db.execute("SELECT 1 FROM episode_evidence v JOIN work_episodes e ON e.id=v.episode_id WHERE e.project=? AND v.event_id=?",
+                                          (project, event_id)).fetchone() for event_id in linked):
+                            raise NormalizationError("analysis_related_evidence_requires_existing_episode")
+                    db.execute("INSERT OR IGNORE INTO work_episodes VALUES (?,?,?)", (eid, project, now()))
                     for event_id in linked:
                         event_row(db, event_id, project)
                         db.execute("INSERT OR IGNORE INTO episode_evidence VALUES (?,?)", (eid, event_id))

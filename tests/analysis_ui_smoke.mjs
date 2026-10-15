@@ -75,4 +75,83 @@ assert.ok(rendered.textContent.includes('Stale:'));
 assert.ok(rendered.textContent.includes('<script>synthetic inert text</script>'));
 assert.equal(flatten(rendered).filter(n => n.tag === 'script').length, 0);
 assert.ok(flatten(rendered).some(n => n.attributes?.['data-event-id'] === eventId));
-console.log('DOM-contract smoke passed: Unicode offsets, explicit preview/Analyze, stale-preview rejection, source navigation, inert model text. No browser/layout acceptance.');
+// Delay a real preview action while the editable selection changes.
+let resolvePreview;
+const delayedPreview = new Promise(resolve => { resolvePreview = resolve; });
+const delayedCalls = [];
+const delayed = {...c, s: {project: 'Synthetic'}, api: async (route, data, query) => {
+  delayedCalls.push({route, data, query});
+  if (route === '/api/analysis/preview') return delayedPreview;
+  return c.api(route, data, query);
+}};
+tree = await renderAnalysis(delayed);
+const delayedCheckbox = flatten(tree).find(n => n.tag === 'input' && n.attributes.type === 'checkbox');
+delayedCheckbox.checked = true; delayedCheckbox.events.change();
+const pendingPreview = findButton(tree, 'Preview exact external analysis packet').events.click();
+delayedCheckbox.checked = false; delayedCheckbox.events.change();
+assert.equal(Object.keys(delayed.s.analysisDrafts.Synthetic.selected).length, 0);
+assert.equal(delayed.s.analysisDrafts.Synthetic.preview, null);
+resolvePreview(preview);
+await pendingPreview;
+tree = await renderAnalysis(delayed);
+const restoredAnalyze = flatten(tree).find(n => n.tag === 'button' && n.textContent === 'Analyze this exact reviewed packet');
+if (restoredAnalyze) await restoredAnalyze.events.click();
+assert.equal(delayed.s.analysisDrafts.Synthetic.preview, null, 'A delayed response cannot restore deselected content');
+assert.equal(restoredAnalyze, undefined, 'No stale external preview or Analyze action is restored');
+assert.equal(delayedCalls.filter(c => c.route === '/api/analysis/start').length, 0);
+// Even if the API reuses the same response object, an older Analyze action
+// belongs to its original draft revision, not the newly reviewed revision.
+tree = await renderAnalysis(c);
+await findButton(tree, 'Preview exact external analysis packet').events.click();
+tree = await renderAnalysis(c);
+const olderAnalyze = findButton(tree, 'Analyze this exact reviewed packet');
+const startOffset = flatten(tree).find(n => n.tag === 'input' && n.attributes.name === 'start');
+startOffset.value = 1; startOffset.events.input();
+await findButton(tree, 'Preview exact external analysis packet').events.click();
+const callsBeforeOldAnalyze = calls.filter(c => c.route === '/api/analysis/start').length;
+assert.equal(c.s.analysisDrafts.Synthetic.preview, preview, 'Fixture intentionally reuses object identity');
+await olderAnalyze.events.click();
+assert.equal(calls.filter(c => c.route === '/api/analysis/start').length, callsBeforeOldAnalyze);
+tree = await renderAnalysis(c);
+await findButton(tree, 'Analyze this exact reviewed packet').events.click();
+assert.equal(calls.filter(c => c.route === '/api/analysis/start').length, callsBeforeOldAnalyze + 1);
+
+const episodeId = 'e'.repeat(64);
+const observation = {id: 'f'.repeat(64), body: {method: 'Synthetic attestation', status: 'passed', evidence: [eventId]}};
+const contextLedger = {...ledger, counts: {episodes: 1, assessments: 1, observations: 1}, episodes: [
+  {id: episodeId, project: 'Synthetic', assessments: [assessment], observations: [observation], evidence_ids: [eventId]}]};
+const inputNamed = (tree, name) => flatten(tree).find(n => n.tag === 'input' && n.attributes.name === name);
+const selectNamed = (tree, name) => flatten(tree).find(n => n.tag === 'select' && n.attributes.name === name);
+for (const [label, change] of [
+  ['start offset', tree => { const n = inputNamed(tree, 'start'); n.value = 1; n.events.input(); }],
+  ['end offset', tree => { const n = inputNamed(tree, 'end'); n.value = 2; n.events.input(); }],
+  ['text part', tree => selectNamed(tree, 'part').events.change({target: {value: row.parts[1].part}})],
+  ['remove selection', tree => findButton(tree, 'Remove selection').events.click()],
+  ['update target', tree => selectNamed(tree, 'episode').events.change({target: {value: ''}})],
+  ['observation inclusion', tree => inputNamed(tree, 'observation').events.change({target: {checked: true}})],
+  ['page offset', tree => findButton(tree, 'Next').events.click()],
+]) {
+  let resolve;
+  const pending = new Promise(done => { resolve = done; });
+  let starts = 0;
+  const context = {...c, s: {project: 'Synthetic'}, api: async (route, data, query) => {
+    if (route === '/api/analysis') return contextLedger;
+    if (route === '/api/analysis/candidates') return {items: [row], total: 100, offset: 0, limit: 50};
+    if (route === '/api/analysis/preview') return pending;
+    if (route === '/api/analysis/start') starts++;
+    return c.api(route, data, query);
+  }};
+  let current = await renderAnalysis(context);
+  const checkbox = inputNamed(current, 'select-' + eventId);
+  checkbox.checked = true; checkbox.events.change();
+  await selectNamed(current, 'episode').events.change({target: {value: episodeId}});
+  current = await renderAnalysis(context);
+  const request = findButton(current, 'Preview exact external analysis packet').events.click();
+  await change(current);
+  resolve(preview); await request;
+  current = await renderAnalysis(context);
+  assert.equal(context.s.analysisDrafts.Synthetic.preview, null, label + ' invalidates a pending response');
+  assert.equal(flatten(current).some(n => n.tag === 'button' && n.textContent === 'Analyze this exact reviewed packet'), false);
+  assert.equal(starts, 0);
+}
+console.log('DOM-contract smoke passed: Unicode offsets, explicit preview/Analyze, delayed-preview invalidation, source navigation, inert model text. No browser/layout acceptance.');

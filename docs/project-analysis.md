@@ -58,11 +58,19 @@ capability diagnostics described below are tolerated.
    episode. An unchanged successful packet/provider/schema/observation state
    reuses the persisted result without a model call or additional assessment.
 
-The preview is invalidated by changed selections in the UI. The server also
-rejects changed source revision/grouping/observation state and revalidates current
-startup grants before sending a persisted preview. Inference failure never saves
-a successful assessment. Older project labels remain selectable for historical
-analysis after grouping changes; their affected assessments display as stale.
+Draft changes invalidate the preview and any pending preview response or older
+Analyze action. The server rejects changed source revision/grouping/observation
+state. Unsuccessful previews also require unchanged known-episode context;
+successful identical packet/provider results still reuse without a model call.
+Persistence checks new episode support and the 12-episode limit against the live
+project in one transaction. Failure saves no partial episodes or assessments.
+
+Preview and sending both revalidate included observations' original proof-source
+and artifact startup grants, including cached previews after restart. Captured
+proof bytes and hashes stay unchanged. Older project labels remain selectable
+for historical analysis after grouping changes; affected assessments display as
+stale, and episodes with moved or deleted evidence are excluded from outgoing
+context. Explicitly selecting such an episode for update is rejected.
 
 ## Evidence and interpretation contract
 
